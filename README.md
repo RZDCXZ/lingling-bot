@@ -2,8 +2,7 @@
 
 通过 NapCat 的 OneBot 11 WebSocket 控制一个普通 QQ 小号，并把白名单好友的
 私聊消息、白名单群内的 `@机器人` 消息，以及符合参与条件的群聊话题交给本机
-Codex。文字聊天、实时搜索、图片识别以及图片生成/编辑全部走 Codex CLI，不再
-调用 PackyAPI。
+Codex。文字聊天、实时搜索、图片识别以及图片生成/编辑全部走受限的 Codex CLI。
 
 > NapCat/OneBot 不是 QQ 开放平台官方群机器人通道，存在登录验证、掉线、
 > 账号限制或封号风险。只使用专门的小号，不要使用主 QQ，也不要在同一设备上
@@ -389,7 +388,6 @@ src/
 ├── create-bot.ts               # NapCat/OneBot 运行时装配
 └── index.ts                    # 启动与优雅退出
 
-legacy/qq-open-platform/        # 先前 QQ 开放平台接入源码备份
 docs/OPERATIONS.md              # 当前部署、运维、加群、验证和排障
 docs/PERSONA.md                 # 铃铃酱人设的非敏感持久副本
 AGENTS.md                       # 新 AI 会话首先读取的项目约束与状态
