@@ -33,6 +33,16 @@ async function main(): Promise<void> {
     maxConcurrent: config.ai.maxConcurrent,
     conversationMaxTurns: config.conversation.maxTurns,
     conversationTtlHours: config.conversation.ttlMs / (60 * 60 * 1_000),
+    groupParticipationEnabled: config.groupParticipation.enabled,
+    groupParticipationMinMessages: config.groupParticipation.minMessages,
+    groupParticipationCooldownSeconds:
+      config.groupParticipation.cooldownMs / 1_000,
+    groupParticipationProbability: config.groupParticipation.probability,
+    proactiveEngagementEnabled: config.proactive.enabled,
+    proactiveDailyTextLimit: config.proactive.dailyTextLimit,
+    proactiveActiveHours: `${String(Math.floor(config.proactive.activeStartMinutes / 60)).padStart(2, "0")}:${String(config.proactive.activeStartMinutes % 60).padStart(2, "0")}-${String(Math.floor(config.proactive.activeEndMinutes / 60)).padStart(2, "0")}:${String(config.proactive.activeEndMinutes % 60).padStart(2, "0")}`,
+    proactiveHotTopicEnabled: config.proactive.hotTopicEnabled,
+    groupReactionEnabled: config.reaction.enabled,
   });
 
   await runtime.start();

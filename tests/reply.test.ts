@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  sendOneBotGroupMessage,
   sendOneBotGroupText,
   sendOneBotReply,
   sendOneBotPrivateText,
@@ -45,6 +46,20 @@ describe("QQ 回复分段", () => {
         { type: "reply", data: { id: "30003" } },
         { type: "at", data: { qq: "20002" } },
         { type: "text", data: { text: " 你好" } },
+      ],
+    });
+  });
+
+  it("自然加入群聊时发送不引用也不 @成员的普通群消息", async () => {
+    const call = vi.fn().mockResolvedValue({ message_id: "reply" });
+    const client: OneBotActionCaller = { call };
+
+    await sendOneBotGroupMessage(client, "10001", "我也来接一句喵~");
+
+    expect(call).toHaveBeenCalledWith("send_group_msg", {
+      group_id: "10001",
+      message: [
+        { type: "text", data: { text: "我也来接一句喵~" } },
       ],
     });
   });

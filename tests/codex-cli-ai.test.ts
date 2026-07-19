@@ -192,6 +192,57 @@ describe("Codex 提示词", () => {
     expect(prompt).toContain("默认指《明日方舟：终末地》的企鹅相关网络梗");
     expect(prompt).toContain("不能擅自拼成格子、鸽子或鸭子的形象");
   });
+
+  it("群聊参与模式默认潜水并使用机器可校验的输出标记", () => {
+    const prompt = buildCodexPrompt(
+      "猫娘人设",
+      [
+        { role: "user", content: "[群友：小明] 这个梗也太离谱了" },
+        { role: "user", content: "[群友：小红] 笑死" },
+      ],
+      "group-participation",
+    );
+
+    expect(prompt).toContain("默认选择潜水");
+    expect(prompt).toContain("[[SILENT]]");
+    expect(prompt).toContain("[[REPLY]]");
+    expect(prompt).toContain("被动参与模式禁止生成或编辑图片");
+    expect(prompt).toContain("连续的 user 消息可能来自不同群友");
+  });
+
+  it("轻量表情模式只能从给定 ID 中选择且不使用工具", () => {
+    const prompt = buildCodexPrompt(
+      "猫娘人设",
+      [{ role: "user", content: "[群友：小明] 这波可以" }],
+      "group-reaction",
+      { reactionEmojiIds: ["14", "66", "76"] },
+    );
+
+    expect(prompt).toContain("14=微笑");
+    expect(prompt).toContain("66=爱心");
+    expect(prompt).toContain("76=赞");
+    expect(prompt).toContain("[[REACTION:表情ID]]");
+    expect(prompt).toContain("不得使用任何工具");
+  });
+
+  it("热点投喂模式限定 AI 与指定二游并要求实时搜索和来源", () => {
+    const prompt = buildCodexPrompt(
+      "猫娘人设",
+      [],
+      "hot-topic-feed",
+      {
+        hotTopics: ["AI", "明日方舟：终末地", "绝区零", "异环", "鸣潮"],
+      },
+    );
+
+    expect(prompt).toContain("立即使用实时网页搜索");
+    expect(prompt).toContain("明日方舟：终末地");
+    expect(prompt).toContain("绝区零");
+    expect(prompt).toContain("异环");
+    expect(prompt).toContain("鸣潮");
+    expect(prompt).toContain("最近 48 小时");
+    expect(prompt).toContain("来源链接");
+  });
 });
 
 describe("Codex JSONL 输出", () => {

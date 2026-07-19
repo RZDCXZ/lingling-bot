@@ -12,9 +12,14 @@ export interface MentionedGroupMessage {
   scope: "group";
   groupId: string;
   senderId: string;
+  senderName?: string;
   messageId: string;
   content: string;
   images?: OneBotImageReference[];
+}
+
+export interface AllowedGroupMessage extends MentionedGroupMessage {
+  mentioned: boolean;
 }
 
 export interface AllowedPrivateMessage {
@@ -26,7 +31,7 @@ export interface AllowedPrivateMessage {
 }
 
 export type AllowedOneBotMessage =
-  | MentionedGroupMessage
+  | AllowedGroupMessage
   | AllowedPrivateMessage;
 
 export function parseAllowedOneBotMessage(
@@ -40,7 +45,7 @@ export function parseAllowedOneBotMessage(
     return parseAllowedPrivateMessage(input, allowedPrivateUserIds);
   }
   if (input.message_type === "group") {
-    return parseMentionedGroupMessage(input, allowedGroupIds);
+    return parseAllowedGroupMessage(input, allowedGroupIds);
   }
   return null;
 }
@@ -49,6 +54,17 @@ export function parseMentionedGroupMessage(
   input: unknown,
   allowedGroupIds: ReadonlySet<string>,
 ): MentionedGroupMessage | null {
+  const parsed = parseAllowedGroupMessage(input, allowedGroupIds);
+  if (!parsed?.mentioned) return null;
+
+  const { mentioned: _mentioned, ...message } = parsed;
+  return message;
+}
+
+export function parseAllowedGroupMessage(
+  input: unknown,
+  allowedGroupIds: ReadonlySet<string>,
+): AllowedGroupMessage | null {
   if (!isRecord(input)) return null;
   if (input.post_type !== "message" || input.message_type !== "group") {
     return null;
@@ -70,13 +86,15 @@ export function parseMentionedGroupMessage(
         selfId,
       );
 
-  if (!extracted.mentioned) return null;
+  const senderName = readSenderName(input.sender);
   return {
     scope: "group",
     groupId,
     senderId,
+    ...(senderName ? { senderName } : {}),
     messageId,
     content: extracted.content,
+    mentioned: extracted.mentioned,
     ...(extracted.images.length > 0 ? { images: extracted.images } : {}),
   };
 }
@@ -260,6 +278,11 @@ function readId(input: unknown): string | null {
   if (typeof input === "string") return input.trim() || null;
   if (typeof input === "number" && Number.isFinite(input)) return String(input);
   return null;
+}
+
+function readSenderName(input: unknown): string | undefined {
+  if (!isRecord(input)) return undefined;
+  return readNonEmptyString(input.card) ?? readNonEmptyString(input.nickname);
 }
 
 function isRecord(input: unknown): input is Record<string, unknown> {

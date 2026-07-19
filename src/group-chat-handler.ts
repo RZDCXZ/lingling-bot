@@ -47,7 +47,7 @@ export function createChatHandler(options: {
       if (HELP_COMMANDS.has(content.toLowerCase())) {
         await reply.send(
           (message.scope === "group"
-            ? "使用方法：在群里 @我 后发送文字或图片。\n"
+            ? "使用方法：在群里 @我 后发送文字或图片；我也会偶尔自然加入正在聊的话题。\n"
             : "使用方法：直接发送文字或图片即可。\n") +
             "我可以联网搜索、识别图片，也可以按要求生成或编辑图片。\n" +
             "命令：/重置 清除你的当前对话；/帮助 查看说明。",

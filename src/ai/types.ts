@@ -24,6 +24,15 @@ export interface AiMessage {
 
 export interface GenerateReplyOptions {
   signal?: AbortSignal;
+  mode?:
+    | "direct-reply"
+    | "group-participation"
+    | "group-reaction"
+    | "unanswered-question"
+    | "cold-revival"
+    | "hot-topic-feed";
+  reactionEmojiIds?: readonly string[];
+  hotTopics?: readonly string[];
 }
 
 export interface AiService {

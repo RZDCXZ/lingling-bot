@@ -1,8 +1,15 @@
+import { resolve } from "node:path";
+
 import type { AiGeneratedImage, AiService } from "./ai/types.js";
 import type { AppConfig } from "./config.js";
 import { ConversationMemory } from "./conversation-memory.js";
+import {
+  PersistentEngagementState,
+  type EngagementStatePort,
+} from "./engagement-state.js";
 import { UserFacingError } from "./errors.js";
 import { createChatHandler } from "./group-chat-handler.js";
+import { GroupParticipationCoordinator } from "./group-participation.js";
 import { logger } from "./logger.js";
 import { OneBotWebSocketClient } from "./onebot/client.js";
 import {
@@ -10,7 +17,11 @@ import {
   type ImageLoader,
 } from "./onebot/image-loader.js";
 import { parseAllowedOneBotMessage } from "./onebot/message.js";
-import { sendOneBotReply } from "./onebot/reply.js";
+import {
+  sendOneBotGroupMessage,
+  sendOneBotGroupReply,
+  sendOneBotReply,
+} from "./onebot/reply.js";
 import type {
   OneBotActionCaller,
   OneBotEventHandler,
@@ -37,6 +48,7 @@ export function createBotRuntime(
   memory: ConversationMemory,
   providedClient?: OneBotClientPort,
   providedImageLoader?: ImageLoader,
+  providedEngagementState?: EngagementStatePort,
 ): BotRuntime {
   const client =
     providedClient ??
@@ -65,6 +77,19 @@ export function createBotRuntime(
     config.rateLimit.windowMs,
   );
   const queue = new KeyedTaskQueue(4);
+  const engagementState =
+    providedEngagementState ??
+    new PersistentEngagementState(
+      resolve("data/group-engagement-state.json"),
+      config.proactive.timeZone,
+    );
+  const participation = new GroupParticipationCoordinator({
+    ai,
+    config: config.groupParticipation,
+    proactive: config.proactive,
+    reaction: config.reaction,
+    engagementState,
+  });
 
   const onEvent: OneBotEventHandler = async (event) => {
     const message = parseAllowedOneBotMessage(
@@ -79,9 +104,66 @@ export function createBotRuntime(
     const deduplicationKey = `${message.scope}:${chatId}:${message.messageId}`;
     if (!deduplication.accept(deduplicationKey)) return;
 
+    if (message.scope === "group" && !message.mentioned) {
+      try {
+        const replied = await participation.handleUnmentioned(
+          {
+            groupId: message.groupId,
+            senderId: message.senderId,
+            ...(message.senderName ? { senderName: message.senderName } : {}),
+            messageId: message.messageId,
+            content: message.content,
+            imageCount: message.images?.length ?? 0,
+          },
+          {
+            send: (text) =>
+              sendOneBotGroupMessage(client, message.groupId, text),
+            react: async (messageId, emojiId) => {
+              await client.call("set_msg_emoji_like", {
+                message_id: messageId,
+                emoji_id: emojiId,
+                set: true,
+              });
+            },
+          },
+          () =>
+            chatLimiter.allow(`group:${message.groupId}`) &&
+            globalLimiter.allow("global"),
+        );
+        if (replied === "text") {
+          logger.info("[app] 铃铃酱已自然加入群聊话题");
+        } else if (replied === "reaction") {
+          logger.debug("[app] 铃铃酱已用表情轻量回应群消息");
+        }
+      } catch (error) {
+        const normalized =
+          error instanceof Error ? error : new Error(String(error));
+        logger.warn("[app] 群聊互动处理失败，本轮保持潜水", {
+          name: normalized.name,
+          message: normalized.message,
+        });
+      }
+      return;
+    }
+
+    if (message.scope === "group") {
+      participation.observeHuman({
+        groupId: message.groupId,
+        senderId: message.senderId,
+        ...(message.senderName ? { senderName: message.senderName } : {}),
+        messageId: message.messageId,
+        content: message.content,
+        imageCount: message.images?.length ?? 0,
+      });
+    }
+
     const reply = {
-      send: (text: string, images?: readonly AiGeneratedImage[]) =>
-        sendOneBotReply(client, message, text, images),
+      send: async (text: string, images?: readonly AiGeneratedImage[]) => {
+        await sendOneBotReply(client, message, text, images);
+        if (message.scope === "group") {
+          participation.recordBotReply(message.groupId, text);
+        }
+      },
     };
     const senderKey = `${message.scope}:${chatId}:${message.senderId}`;
     const allowed =
@@ -95,10 +177,23 @@ export function createBotRuntime(
 
     const accepted = queue.enqueue(senderKey, async () => {
       try {
-        const { images: imageReferences, ...chatMessage } = message;
+        const imageReferences = message.images;
         const images = imageReferences?.length
           ? await imageLoader.load(imageReferences)
           : [];
+        const chatMessage =
+          message.scope === "group"
+            ? {
+                scope: "group" as const,
+                groupId: message.groupId,
+                senderId: message.senderId,
+                content: message.content,
+              }
+            : {
+                scope: "private" as const,
+                senderId: message.senderId,
+                content: message.content,
+              };
         await handler.handle(
           {
             ...chatMessage,
@@ -142,11 +237,43 @@ export function createBotRuntime(
   return {
     start: async () => {
       await client.start(onEvent);
+      participation.startScheduler({
+        groupIds: [...config.oneBot.allowedGroupIds],
+        ports: {
+          sendGroupText: (groupId, text) =>
+            sendOneBotGroupMessage(client, groupId, text),
+          sendGroupReply: (target, text) =>
+            sendOneBotGroupReply(
+              client,
+              {
+                scope: "group",
+                groupId: target.groupId,
+                senderId: target.senderId,
+                messageId: target.messageId,
+              },
+              text,
+            ),
+        },
+        allowGeneration: (groupId) =>
+          chatLimiter.allow(`group:${groupId}`) &&
+          globalLimiter.allow("global"),
+        onError: (error) =>
+          logger.warn("[app] 主动互动调度失败，本轮跳过", {
+            name: error.name,
+            message: error.message,
+          }),
+      });
       logger.info("[app] QQ AI 机器人已就绪", {
         allowedGroupCount: config.oneBot.allowedGroupIds.size,
         allowedPrivateUserCount: config.oneBot.allowedPrivateUserIds.size,
+        groupParticipationEnabled: config.groupParticipation.enabled,
+        proactiveEngagementEnabled: config.proactive.enabled,
+        groupReactionEnabled: config.reaction.enabled,
       });
     },
-    stop: () => client.stop(),
+    stop: () => {
+      participation.stopScheduler();
+      client.stop();
+    },
   };
 }

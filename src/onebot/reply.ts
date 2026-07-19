@@ -62,6 +62,21 @@ export async function sendOneBotGroupText(
   await sendOneBotGroupReply(client, target, text);
 }
 
+export async function sendOneBotGroupMessage(
+  client: OneBotActionCaller,
+  groupId: string,
+  text: string,
+): Promise<void> {
+  const chunks = splitReplyText(text);
+  for (const [index, chunk] of chunks.entries()) {
+    const prefix = chunks.length > 1 ? `（${index + 1}/${chunks.length}）\n` : "";
+    await client.call("send_group_msg", {
+      group_id: groupId,
+      message: [{ type: "text", data: { text: `${prefix}${chunk}` } }],
+    });
+  }
+}
+
 export async function sendOneBotGroupReply(
   client: OneBotActionCaller,
   target: OneBotGroupReplyTarget,

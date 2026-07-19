@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  parseAllowedGroupMessage,
   parseAllowedOneBotMessage,
   parseAllowedPrivateMessage,
   parseMentionedGroupMessage,
@@ -36,6 +37,35 @@ function privateEvent(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+describe("parseAllowedGroupMessage", () => {
+  it("解析白名单群中未 @ 的普通聊天并保留群昵称", () => {
+    expect(
+      parseAllowedGroupMessage(
+        groupEvent({
+          sender: { card: "群名片", nickname: "QQ昵称" },
+          message: [{ type: "text", data: { text: " 大家在聊什么？ " } }],
+        }),
+        allowedGroups,
+      ),
+    ).toEqual({
+      scope: "group",
+      groupId: "10001",
+      senderId: "20002",
+      senderName: "群名片",
+      messageId: "30003",
+      content: "大家在聊什么？",
+      mentioned: false,
+    });
+  });
+
+  it("标记明确 @ 机器人的群消息", () => {
+    expect(parseAllowedGroupMessage(groupEvent(), allowedGroups)).toMatchObject({
+      mentioned: true,
+      content: "你好，机器人",
+    });
+  });
+});
 
 describe("parseMentionedGroupMessage", () => {
   it("解析白名单群中 @机器人的数组消息", () => {

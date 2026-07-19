@@ -7,6 +7,7 @@ import {
   createBotRuntime,
   type OneBotClientPort,
 } from "../src/create-bot.js";
+import { VolatileEngagementState } from "../src/group-participation.js";
 import type { ImageLoader } from "../src/onebot/image-loader.js";
 import type { OneBotEventHandler } from "../src/onebot/types.js";
 
@@ -40,6 +41,8 @@ function createConfig(overrides: Record<string, string | undefined> = {}) {
   return parseConfig({
     ONEBOT_ACCESS_TOKEN: "onebot-token",
     ONEBOT_ALLOWED_GROUP_IDS: "10001",
+    PROACTIVE_ENGAGEMENT_ENABLED: "false",
+    GROUP_REACTION_ENABLED: "false",
     ...overrides,
   });
 }
@@ -55,6 +58,8 @@ describe("OneBot 机器人运行时", () => {
       { generateReply },
       new ConversationMemory({ maxTurns: 4 }),
       client,
+      undefined,
+      new VolatileEngagementState(),
     );
     await runtime.start();
 
@@ -87,6 +92,105 @@ describe("OneBot 机器人运行时", () => {
 
     runtime.stop();
     expect(client.stopMock).toHaveBeenCalledOnce();
+  });
+
+  it("在白名单群的话题中经 Codex 判断后发送不带 @ 的自然回复", async () => {
+    const generateReply = vi
+      .fn<AiService["generateReply"]>()
+      .mockResolvedValue("[[REPLY]]这话题已经开始自己长腿跑了😹 喵~");
+    const client = new FakeOneBotClient();
+    const runtime = createBotRuntime(
+      createConfig({
+        GROUP_PARTICIPATION_MIN_MESSAGES: "3",
+        GROUP_PARTICIPATION_PROBABILITY: "1",
+      }),
+      { generateReply },
+      new ConversationMemory({ maxTurns: 4 }),
+      client,
+      undefined,
+      new VolatileEngagementState(),
+    );
+    await runtime.start();
+
+    for (const [index, content] of [
+      "这游戏开局挺正常",
+      "怎么突然开始离谱了",
+      "剧情已经拐到隔壁地图了",
+    ].entries()) {
+      await client.emit({
+        post_type: "message",
+        message_type: "group",
+        self_id: "90009",
+        user_id: index % 2 === 0 ? "20002" : "30003",
+        group_id: "10001",
+        message_id: String(70000 + index),
+        sender: { card: index % 2 === 0 ? "小明" : "小红" },
+        message: [{ type: "text", data: { text: content } }],
+      });
+    }
+
+    expect(generateReply).toHaveBeenCalledOnce();
+    expect(generateReply).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        { role: "user", content: "[群友：小明] 这游戏开局挺正常" },
+        { role: "user", content: "[群友：小红] 怎么突然开始离谱了" },
+      ]),
+      { mode: "group-participation" },
+    );
+    expect(client.callMock).toHaveBeenCalledWith("send_group_msg", {
+      group_id: "10001",
+      message: [
+        {
+          type: "text",
+          data: { text: "这话题已经开始自己长腿跑了😹 喵~" },
+        },
+      ],
+    });
+
+    runtime.stop();
+  });
+
+  it("通过 NapCat set_msg_emoji_like 轻量回应普通群消息", async () => {
+    const generateReply = vi
+      .fn<AiService["generateReply"]>()
+      .mockResolvedValue("[[REACTION:76]]");
+    const client = new FakeOneBotClient();
+    const runtime = createBotRuntime(
+      createConfig({
+        GROUP_PARTICIPATION_PROBABILITY: "0",
+        GROUP_REACTION_ENABLED: "true",
+        GROUP_REACTION_PROBABILITY: "1",
+      }),
+      { generateReply },
+      new ConversationMemory({ maxTurns: 4 }),
+      client,
+      undefined,
+      new VolatileEngagementState(),
+    );
+    await runtime.start();
+
+    await client.emit({
+      post_type: "message",
+      message_type: "group",
+      self_id: "90009",
+      user_id: "20002",
+      group_id: "10001",
+      message_id: "80001",
+      sender: { card: "小明" },
+      message: [{ type: "text", data: { text: "这波操作可以" } }],
+    });
+
+    expect(generateReply).toHaveBeenCalledWith(expect.any(Array), {
+      mode: "group-reaction",
+      reactionEmojiIds: ["14", "66", "76"],
+    });
+    expect(client.callMock).toHaveBeenCalledWith("set_msg_emoji_like", {
+      message_id: "80001",
+      emoji_id: "76",
+      set: true,
+    });
+
+    runtime.stop();
   });
 
   it("把白名单好友的私聊消息交给 AI 并直接回复", async () => {
