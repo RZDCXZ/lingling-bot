@@ -19,5 +19,9 @@ describe("铃铃酱提示词单一版本", () => {
     expect(parse(environmentTemplate).AI_SYSTEM_PROMPT).toBe(
       DEFAULT_SYSTEM_PROMPT,
     );
+    expect(DEFAULT_SYSTEM_PROMPT).toContain(
+      "默认几乎每条回复都至少使用一次",
+    );
+    expect(DEFAULT_SYSTEM_PROMPT).not.toContain("大约每两条回复使用一次");
   });
 });
