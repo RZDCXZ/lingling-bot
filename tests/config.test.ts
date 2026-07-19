@@ -1,3 +1,6 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import { ConfigurationError, parseConfig } from "../src/config.js";
@@ -71,6 +74,7 @@ describe("parseConfig", () => {
       sendMinutes: 22 * 60,
       catchUpEndMinutes: 22 * 60 + 10,
       maxImages: 6,
+      archiveDirectory: join(homedir(), "Pictures", "daily-sese"),
     });
     expect(config.reaction).toEqual({
       enabled: true,
@@ -185,6 +189,7 @@ describe("parseConfig", () => {
         DAILY_LONGEVITY_SEND_TIME: "21:55",
         DAILY_LONGEVITY_CATCH_UP_END: "22:05",
         DAILY_LONGEVITY_MAX_IMAGES: "4",
+        DAILY_LONGEVITY_ARCHIVE_DIR: "/tmp/custom-daily-sese",
         GROUP_REACTION_ENABLED: "false",
         GROUP_REACTION_PROBABILITY: "0.2",
         GROUP_REACTION_EMOJI_IDS: "66,76",
@@ -222,6 +227,7 @@ describe("parseConfig", () => {
       sendMinutes: 21 * 60 + 55,
       catchUpEndMinutes: 22 * 60 + 5,
       maxImages: 4,
+      archiveDirectory: "/tmp/custom-daily-sese",
     });
   });
 
@@ -240,6 +246,9 @@ describe("parseConfig", () => {
     ).toThrow(ConfigurationError);
     expect(() =>
       parseConfig(validEnv({ GROUP_REACTION_EMOJI_IDS: "66,nope" })),
+    ).toThrow(ConfigurationError);
+    expect(() =>
+      parseConfig(validEnv({ DAILY_LONGEVITY_ARCHIVE_DIR: "relative/path" })),
     ).toThrow(ConfigurationError);
     expect(() =>
       parseConfig(

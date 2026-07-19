@@ -1,3 +1,6 @@
+import { homedir } from "node:os";
+import { isAbsolute, join } from "node:path";
+
 import { config as loadDotenv } from "dotenv";
 import { z } from "zod";
 
@@ -22,6 +25,16 @@ const booleanFromEnv = (fallback: boolean) =>
     if (value === false || value === "false" || value === "0") return false;
     return value;
   }, z.boolean());
+
+const absoluteDirectoryFromEnv = (fallback: string) =>
+  z.preprocess(
+    (value) => (value === undefined || value === "" ? fallback : value),
+    z
+      .string()
+      .trim()
+      .min(1, "目录不能为空")
+      .refine(isAbsolute, "必须填写绝对路径"),
+  );
 
 const timeOfDayFromEnv = (fallback: string) =>
   z
@@ -245,6 +258,9 @@ const envSchema = z
     DAILY_LONGEVITY_SEND_TIME: timeOfDayFromEnv("22:00"),
     DAILY_LONGEVITY_CATCH_UP_END: timeOfDayFromEnv("22:10"),
     DAILY_LONGEVITY_MAX_IMAGES: integerFromEnv(6, 1, 12),
+    DAILY_LONGEVITY_ARCHIVE_DIR: absoluteDirectoryFromEnv(
+      join(homedir(), "Pictures", "daily-sese"),
+    ),
     GROUP_REACTION_ENABLED: booleanFromEnv(true),
     GROUP_REACTION_PROBABILITY: numberFromEnv(0.12, 0, 1),
     GROUP_REACTION_COOLDOWN_MS: integerFromEnv(
@@ -440,6 +456,7 @@ export interface AppConfig {
     sendMinutes: number;
     catchUpEndMinutes: number;
     maxImages: number;
+    archiveDirectory: string;
   };
   reaction: {
     enabled: boolean;
@@ -542,6 +559,7 @@ export function parseConfig(
       sendMinutes: parsed.DAILY_LONGEVITY_SEND_TIME,
       catchUpEndMinutes: parsed.DAILY_LONGEVITY_CATCH_UP_END,
       maxImages: parsed.DAILY_LONGEVITY_MAX_IMAGES,
+      archiveDirectory: parsed.DAILY_LONGEVITY_ARCHIVE_DIR,
     },
     reaction: {
       enabled: parsed.GROUP_REACTION_ENABLED,

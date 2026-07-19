@@ -16,7 +16,10 @@ const config: AppConfig["longevity"] = {
   sendMinutes: 22 * 60,
   catchUpEndMinutes: 22 * 60 + 10,
   maxImages: 6,
+  archiveDirectory: "/tmp/daily-sese-test",
 };
+
+const archiveImages = () => Promise.resolve();
 
 function image(label: string): AiImage {
   return {
@@ -41,6 +44,7 @@ describe("延年益寿定时环节", () => {
       config,
       tickMs: 30_000,
       now: () => now,
+      archiveImages,
     });
     const scheduledPorts = ports();
 
@@ -70,11 +74,14 @@ describe("延年益寿定时环节", () => {
       config,
       tickMs: 30_000,
       now: () => now,
+      archiveImages,
     });
     const scheduledPorts = ports();
 
-    expect(coordinator.acceptImages("30003", [first])).toBeNull();
-    expect(coordinator.acceptImages("20002", [first, second, third])).toEqual({
+    await expect(coordinator.acceptImages("30003", [first])).resolves.toBeNull();
+    await expect(
+      coordinator.acceptImages("20002", [first, second, third]),
+    ).resolves.toEqual({
       accepted: 3,
       ignored: 0,
       total: 3,
@@ -111,6 +118,7 @@ describe("延年益寿定时环节", () => {
       config,
       tickMs: 30_000,
       now: () => now,
+      archiveImages,
     });
     const emptyPorts = ports();
 
@@ -124,8 +132,9 @@ describe("延年益寿定时环节", () => {
       config,
       tickMs: 30_000,
       now: () => now,
+      archiveImages,
     });
-    rejectedCoordinator.acceptImages("20002", [image("rejected")]);
+    await rejectedCoordinator.acceptImages("20002", [image("rejected")]);
     now = Date.parse("2026-07-20T14:00:00.000Z");
     const rejectedPorts = ports();
 
@@ -134,19 +143,20 @@ describe("延年益寿定时环节", () => {
     expect(rejectedPorts.sendGroupPost).not.toHaveBeenCalled();
   });
 
-  it("允许投稿人查看数量并清空当晚投稿", () => {
+  it("允许投稿人查看数量并清空当晚投稿", async () => {
     const now = Date.parse("2026-07-19T13:55:00.000Z");
     const coordinator = new DailyLongevityCoordinator({
       ai: { generateReply: vi.fn<AiService["generateReply"]>() },
       config,
       tickMs: 30_000,
       now: () => now,
+      archiveImages,
     });
-    coordinator.acceptImages("20002", [image("a"), image("b")]);
+    await coordinator.acceptImages("20002", [image("a"), image("b")]);
 
-    expect(coordinator.submissionCount("20002")).toBe(2);
-    expect(coordinator.cancelSubmission("20002")).toBe(2);
-    expect(coordinator.submissionCount("20002")).toBe(0);
+    await expect(coordinator.submissionCount("20002")).resolves.toBe(2);
+    await expect(coordinator.cancelSubmission("20002")).resolves.toBe(2);
+    await expect(coordinator.submissionCount("20002")).resolves.toBe(0);
   });
 });
 

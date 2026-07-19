@@ -101,6 +101,7 @@ DAILY_LONGEVITY_REMINDER_TIME=21:50
 DAILY_LONGEVITY_SEND_TIME=22:00
 DAILY_LONGEVITY_CATCH_UP_END=22:10
 DAILY_LONGEVITY_MAX_IMAGES=6
+DAILY_LONGEVITY_ARCHIVE_DIR=/Users/why/Pictures/daily-sese
 
 GROUP_REACTION_ENABLED=true
 GROUP_REACTION_PROBABILITY=0.12
@@ -299,7 +300,7 @@ GROUP_OLD_JOKE_MEMORY_MESSAGES=30
   明显虚构的无厘头罪名；不能为发癫而发癫，且必须锚定此人当天的真实发言，不得编造黑料、真实违法行为或攻击身份、外貌、家庭、
   健康和隐私。连续两天尽量不批斗同一人，`21:00`～`22:00` 可补触发一次。
 - 延年益寿：每天 `21:50` 只私聊显式配置的投稿主号征集图片，`21:50`～`22:00`
-  收到的私聊图片会进入当晚内存队列，最多 6 张；`22:00` 由 Codex 逐图审核，
+  收到的私聊图片会进入当晚内存队列并立即按日期归档到本机，最多 6 张；`22:00` 由 Codex 逐图审核，
   只把明确成年、非露骨、非真人的二次元图片连同一条暧昧但不露骨的配文发送到
   显式目标群。没有投稿或全部拒绝时不发群消息。投稿人可用 `/延年益寿状态` 查看
   数量，用 `/取消延年益寿` 清空。
@@ -314,9 +315,10 @@ GROUP_OLD_JOKE_MEMORY_MESSAGES=30
 批斗候选正文只保存在进程内存中，每群最多 120 条；到批斗尝试、自然日切换或进程
 重启时清空。持久状态只保存任务日期和上次目标 QQ 号，不保存聊天正文。
 
-延年益寿投稿图也只保存在内存中，审核发送、跨日或进程重启即清空，不写入会话
-记忆或项目数据文件。版权授权无法由程序核验，21:50 的提醒会要求投稿人只提交
-自己有权转发的图片。
+延年益寿待发送队列只保存在内存中，审核发送、跨日或进程重启即清空；成功收录的
+原图会保存到 `DAILY_LONGEVITY_ARCHIVE_DIR/YYYY-MM-DD/`，文件名从 `001` 递增，
+不会写入会话记忆或项目数据文件。`/取消延年益寿` 只清空待发送队列，不删除归档。
+版权授权无法由程序核验，21:50 的提醒会要求投稿人只提交自己有权转发的图片。
 
 `PROACTIVE_ENGAGEMENT_ENABLED=false` 会关闭早报、批斗、定时救场、冷场续聊、热点及主动时段
 限制；普通话题参与和轻量表情仍可分别用 `GROUP_PARTICIPATION_ENABLED`、

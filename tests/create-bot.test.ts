@@ -1,3 +1,7 @@
+import { readFile, readdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it, vi } from "vitest";
 
 import type { AiService } from "../src/ai/types.js";
@@ -60,12 +64,17 @@ describe("OneBot 机器人运行时", () => {
       .mockResolvedValue("[[LONGEVITY:1]]今晚这份养生内容，建议反复观看喵~");
     const load = vi.fn<ImageLoader["load"]>().mockResolvedValue([aiImage]);
     const client = new FakeOneBotClient();
+    const archiveRoot = join(
+      tmpdir(),
+      `qq-bot-create-bot-${process.pid}-${Date.now()}`,
+    );
     const runtime = createBotRuntime(
       createConfig({
         ONEBOT_ALLOWED_PRIVATE_USER_IDS: "20002",
         DAILY_LONGEVITY_ENABLED: "true",
         DAILY_LONGEVITY_SUBMITTER_USER_ID: "20002",
         DAILY_LONGEVITY_TARGET_GROUP_IDS: "10001",
+        DAILY_LONGEVITY_ARCHIVE_DIR: archiveRoot,
       }),
       { generateReply },
       new ConversationMemory({ maxTurns: 4 }),
@@ -94,6 +103,12 @@ describe("OneBot 机器人运行时", () => {
 
       expect(load).toHaveBeenCalledOnce();
       expect(generateReply).not.toHaveBeenCalled();
+      expect(await readdir(join(archiveRoot, "2026-07-19"))).toEqual([
+        "001.png",
+      ]);
+      await expect(
+        readFile(join(archiveRoot, "2026-07-19", "001.png")),
+      ).resolves.toEqual(Buffer.from("iVBORw0KGgo=", "base64"));
       expect(client.callMock).toHaveBeenCalledWith("send_private_msg", {
         user_id: "20002",
         message: [
@@ -131,6 +146,7 @@ describe("OneBot 机器人运行时", () => {
     } finally {
       runtime.stop();
       vi.useRealTimers();
+      await rm(archiveRoot, { recursive: true, force: true });
     }
   });
 

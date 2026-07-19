@@ -114,7 +114,7 @@ export function createBotRuntime(
     if (message.scope === "private") {
       const command = message.content.trim();
       if (command === "/取消延年益寿") {
-        const removed = longevity.cancelSubmission(message.senderId);
+        const removed = await longevity.cancelSubmission(message.senderId);
         if (removed !== null) {
           await sendOneBotPrivateMessage(
             client,
@@ -127,7 +127,7 @@ export function createBotRuntime(
         }
       }
       if (command === "/延年益寿状态") {
-        const count = longevity.submissionCount(message.senderId);
+        const count = await longevity.submissionCount(message.senderId);
         if (count !== null) {
           await sendOneBotPrivateMessage(
             client,
@@ -143,7 +143,7 @@ export function createBotRuntime(
       ) {
         try {
           const images = await imageLoader.load(message.images);
-          const result = longevity.acceptImages(message.senderId, images);
+          const result = await longevity.acceptImages(message.senderId, images);
           if (result) {
             const ignored = result.ignored
               ? `，另有 ${result.ignored} 张因达到数量上限未收录`
@@ -151,14 +151,14 @@ export function createBotRuntime(
             await sendOneBotPrivateMessage(
               client,
               message.senderId,
-              `收到 ${result.accepted} 张，今晚已缓存 ${result.total}/${result.max} 张${ignored}。22:00 会先审核，通过后再发到群里。`,
+              `收到 ${result.accepted} 张，已保存到当天归档文件夹；今晚已缓存 ${result.total}/${result.max} 张${ignored}。22:00 会先审核，通过后再发到群里。`,
             );
           }
         } catch (error) {
           const publicMessage =
             error instanceof UserFacingError
               ? error.publicMessage
-              : "暂时无法读取这次投稿图片，请重新发送。";
+              : "暂时无法读取或保存这次投稿图片，请检查图片和归档目录后重试。";
           await sendOneBotPrivateMessage(client, message.senderId, publicMessage);
         }
         return;

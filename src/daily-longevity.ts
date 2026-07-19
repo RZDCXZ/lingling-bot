@@ -1,5 +1,6 @@
 import type { AiImage, AiReplyResult, AiService } from "./ai/types.js";
 import type { AppConfig } from "./config.js";
+import { archiveDailyImages } from "./daily-image-archive.js";
 import { formatDayKey } from "./engagement-state.js";
 import { isWithinTimeWindow } from "./group-participation.js";
 
@@ -23,6 +24,10 @@ export interface DailyLongevityOptions {
   config: AppConfig["longevity"];
   tickMs: number;
   now?: () => number;
+  archiveImages?: (
+    dayKey: string,
+    images: readonly AiImage[],
+  ) => Promise<void>;
 }
 
 export interface LongevitySubmissionResult {
@@ -34,7 +39,11 @@ export interface LongevitySubmissionResult {
 
 export class DailyLongevityCoordinator {
   private readonly now: () => number;
+  private readonly archiveImages: NonNullable<
+    DailyLongevityOptions["archiveImages"]
+  >;
   private readonly images: AiImage[] = [];
+  private submissionOperation = Promise.resolve();
   private currentDayKey: string | undefined;
   private remindedDayKey: string | undefined;
   private sentDayKey: string | undefined;
@@ -43,6 +52,15 @@ export class DailyLongevityCoordinator {
 
   constructor(private readonly options: DailyLongevityOptions) {
     this.now = options.now ?? Date.now;
+    this.archiveImages =
+      options.archiveImages ??
+      (async (dayKey, images) => {
+        await archiveDailyImages(
+          options.config.archiveDirectory,
+          dayKey,
+          images,
+        );
+      });
   }
 
   isSubmissionWindow(userId: string, now = this.now()): boolean {
@@ -58,56 +76,71 @@ export class DailyLongevityCoordinator {
     );
   }
 
-  acceptImages(
+  async acceptImages(
     userId: string,
     images: readonly AiImage[],
     now = this.now(),
-  ): LongevitySubmissionResult | null {
-    if (!this.isSubmissionWindow(userId, now) || images.length === 0) {
-      return null;
-    }
+  ): Promise<LongevitySubmissionResult | null> {
+    return this.runSubmissionOperation(async () => {
+      if (!this.isSubmissionWindow(userId, now) || images.length === 0) {
+        return null;
+      }
 
-    const dayKey = this.syncDay(now);
-    this.remindedDayKey = dayKey;
-    const remaining = Math.max(
-      0,
-      this.options.config.maxImages - this.images.length,
-    );
-    const acceptedImages = images.slice(0, remaining).map((image) => ({
-      dataUrl: image.dataUrl,
-      detail: image.detail,
-    }));
-    this.images.push(...acceptedImages);
-    return {
-      accepted: acceptedImages.length,
-      ignored: images.length - acceptedImages.length,
-      total: this.images.length,
-      max: this.options.config.maxImages,
-    };
+      const dayKey = this.syncDay(now);
+      this.remindedDayKey = dayKey;
+      const remaining = Math.max(
+        0,
+        this.options.config.maxImages - this.images.length,
+      );
+      const acceptedImages = images.slice(0, remaining).map((image) => ({
+        dataUrl: image.dataUrl,
+        detail: image.detail,
+      }));
+      if (acceptedImages.length > 0) {
+        await this.archiveImages(dayKey, acceptedImages);
+        this.images.push(...acceptedImages);
+      }
+      return {
+        accepted: acceptedImages.length,
+        ignored: images.length - acceptedImages.length,
+        total: this.images.length,
+        max: this.options.config.maxImages,
+      };
+    });
   }
 
-  cancelSubmission(userId: string, now = this.now()): number | null {
-    if (
-      !this.options.config.enabled ||
-      userId !== this.options.config.submitterUserId
-    ) {
-      return null;
-    }
-    this.syncDay(now);
-    const removed = this.images.length;
-    this.images.splice(0);
-    return removed;
+  async cancelSubmission(
+    userId: string,
+    now = this.now(),
+  ): Promise<number | null> {
+    return this.runSubmissionOperation(() => {
+      if (
+        !this.options.config.enabled ||
+        userId !== this.options.config.submitterUserId
+      ) {
+        return null;
+      }
+      this.syncDay(now);
+      const removed = this.images.length;
+      this.images.splice(0);
+      return removed;
+    });
   }
 
-  submissionCount(userId: string, now = this.now()): number | null {
-    if (
-      !this.options.config.enabled ||
-      userId !== this.options.config.submitterUserId
-    ) {
-      return null;
-    }
-    this.syncDay(now);
-    return this.images.length;
+  async submissionCount(
+    userId: string,
+    now = this.now(),
+  ): Promise<number | null> {
+    return this.runSubmissionOperation(() => {
+      if (
+        !this.options.config.enabled ||
+        userId !== this.options.config.submitterUserId
+      ) {
+        return null;
+      }
+      this.syncDay(now);
+      return this.images.length;
+    });
   }
 
   startScheduler(ports: DailyLongevityPorts): void {
@@ -135,7 +168,9 @@ export class DailyLongevityCoordinator {
     this.running = true;
     try {
       const now = this.now();
-      const dayKey = this.syncDay(now);
+      const dayKey = await this.runSubmissionOperation(() =>
+        this.syncDay(now),
+      );
       if (
         this.remindedDayKey !== dayKey &&
         isWithinTimeWindow(
@@ -166,7 +201,9 @@ export class DailyLongevityCoordinator {
       }
 
       this.sentDayKey = dayKey;
-      const submitted = this.images.splice(0);
+      const submitted = await this.runSubmissionOperation(() =>
+        this.images.splice(0),
+      );
       if (submitted.length === 0) return;
       if (!ports.allowGeneration()) return;
 
@@ -201,6 +238,17 @@ export class DailyLongevityCoordinator {
       this.images.splice(0);
     }
     return dayKey;
+  }
+
+  private runSubmissionOperation<T>(
+    operation: () => Promise<T> | T,
+  ): Promise<T> {
+    const result = this.submissionOperation.then(operation);
+    this.submissionOperation = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   }
 }
 
