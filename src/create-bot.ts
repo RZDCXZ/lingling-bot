@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import type { AiGeneratedImage, AiService } from "./ai/types.js";
 import type { AppConfig } from "./config.js";
 import { ConversationMemory } from "./conversation-memory.js";
+import { DailyLongevityCoordinator } from "./daily-longevity.js";
 import {
   PersistentEngagementState,
   type EngagementStatePort,
@@ -20,6 +21,7 @@ import { parseAllowedOneBotMessage } from "./onebot/message.js";
 import {
   sendOneBotGroupMessage,
   sendOneBotGroupReply,
+  sendOneBotPrivateMessage,
   sendOneBotReply,
 } from "./onebot/reply.js";
 import type {
@@ -90,6 +92,11 @@ export function createBotRuntime(
     reaction: config.reaction,
     engagementState,
   });
+  const longevity = new DailyLongevityCoordinator({
+    ai,
+    config: config.longevity,
+    tickMs: config.proactive.tickMs,
+  });
 
   const onEvent: OneBotEventHandler = async (event) => {
     const message = parseAllowedOneBotMessage(
@@ -103,6 +110,60 @@ export function createBotRuntime(
       message.scope === "group" ? message.groupId : message.senderId;
     const deduplicationKey = `${message.scope}:${chatId}:${message.messageId}`;
     if (!deduplication.accept(deduplicationKey)) return;
+
+    if (message.scope === "private") {
+      const command = message.content.trim();
+      if (command === "/取消延年益寿") {
+        const removed = longevity.cancelSubmission(message.senderId);
+        if (removed !== null) {
+          await sendOneBotPrivateMessage(
+            client,
+            message.senderId,
+            removed > 0
+              ? `今晚已缓存的 ${removed} 张投稿已经清空。`
+              : "今晚还没有缓存投稿。",
+          );
+          return;
+        }
+      }
+      if (command === "/延年益寿状态") {
+        const count = longevity.submissionCount(message.senderId);
+        if (count !== null) {
+          await sendOneBotPrivateMessage(
+            client,
+            message.senderId,
+            `今晚已缓存 ${count}/${config.longevity.maxImages} 张投稿。`,
+          );
+          return;
+        }
+      }
+      if (
+        message.images?.length &&
+        longevity.isSubmissionWindow(message.senderId)
+      ) {
+        try {
+          const images = await imageLoader.load(message.images);
+          const result = longevity.acceptImages(message.senderId, images);
+          if (result) {
+            const ignored = result.ignored
+              ? `，另有 ${result.ignored} 张因达到数量上限未收录`
+              : "";
+            await sendOneBotPrivateMessage(
+              client,
+              message.senderId,
+              `收到 ${result.accepted} 张，今晚已缓存 ${result.total}/${result.max} 张${ignored}。22:00 会先审核，通过后再发到群里。`,
+            );
+          }
+        } catch (error) {
+          const publicMessage =
+            error instanceof UserFacingError
+              ? error.publicMessage
+              : "暂时无法读取这次投稿图片，请重新发送。";
+          await sendOneBotPrivateMessage(client, message.senderId, publicMessage);
+        }
+        return;
+      }
+    }
 
     if (message.scope === "group" && !message.mentioned) {
       try {
@@ -263,16 +324,35 @@ export function createBotRuntime(
             message: error.message,
           }),
       });
+      longevity.startScheduler({
+        allowGeneration: () =>
+          config.longevity.targetGroupIds.every((groupId) =>
+            chatLimiter.allow(`group:${groupId}`),
+          ) && globalLimiter.allow("global"),
+        sendPrivateText: (userId, text) =>
+          sendOneBotPrivateMessage(client, userId, text),
+        sendGroupPost: (groupId, text, images) =>
+          sendOneBotGroupMessage(client, groupId, text, images),
+        onError: (error) =>
+          logger.warn("[app] 延年益寿调度失败，本轮跳过", {
+            name: error.name,
+            message: error.message,
+          }),
+      });
       logger.info("[app] QQ AI 机器人已就绪", {
         allowedGroupCount: config.oneBot.allowedGroupIds.size,
         allowedPrivateUserCount: config.oneBot.allowedPrivateUserIds.size,
         groupParticipationEnabled: config.groupParticipation.enabled,
         proactiveEngagementEnabled: config.proactive.enabled,
+        morningRadarEnabled: config.proactive.morningRadarEnabled,
+        dailyRoastEnabled: config.proactive.dailyRoastEnabled,
+        dailyLongevityEnabled: config.longevity.enabled,
         groupReactionEnabled: config.reaction.enabled,
       });
     },
     stop: () => {
       participation.stopScheduler();
+      longevity.stopScheduler();
       client.stop();
     },
   };

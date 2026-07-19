@@ -30,9 +30,13 @@ export interface GenerateReplyOptions {
     | "group-reaction"
     | "unanswered-question"
     | "cold-revival"
-    | "hot-topic-feed";
+    | "hot-topic-feed"
+    | "morning-radar"
+    | "daily-roast"
+    | "daily-longevity";
   reactionEmojiIds?: readonly string[];
   hotTopics?: readonly string[];
+  weatherLocation?: string;
 }
 
 export interface AiService {

@@ -25,19 +25,24 @@ describe("主动互动持久化状态", () => {
     directories.push(directory);
     const filePath = join(directory, "state.json");
     const now = Date.parse("2026-07-19T04:00:00.000Z");
-    const store = new PersistentEngagementState(filePath, "Asia/Singapore");
+    const store = new PersistentEngagementState(filePath, "Asia/Shanghai");
 
     await store.recordProactiveText("10001", now, "热点投喂内容");
     await store.recordReaction("10001", now + 1_000);
     await store.setNextHotTopicAt("10001", now + 86_400_000, now);
+    await store.recordMorningRadarAttempt("10001", now);
+    await store.recordDailyRoastAttempt("10001", now, "20002");
 
-    const reloaded = new PersistentEngagementState(filePath, "Asia/Singapore");
+    const reloaded = new PersistentEngagementState(filePath, "Asia/Shanghai");
     await expect(reloaded.get("10001", now + 2_000)).resolves.toMatchObject({
       proactiveTextCount: 1,
       reactionCount: 1,
       lastProactiveTextAt: now,
       lastReactionAt: now + 1_000,
       nextHotTopicAt: now + 86_400_000,
+      lastMorningRadarDayKey: "2026-07-19",
+      lastDailyRoastDayKey: "2026-07-19",
+      lastRoastSenderId: "20002",
       recentHotTopics: ["热点投喂内容"],
     });
 
@@ -53,7 +58,7 @@ describe("主动互动持久化状态", () => {
     const firstDay = Date.parse("2026-07-19T04:00:00.000Z");
     const secondDay = Date.parse("2026-07-20T04:00:00.000Z");
     const nextHotTopicAt = secondDay + 3_600_000;
-    const store = new PersistentEngagementState(filePath, "Asia/Singapore");
+    const store = new PersistentEngagementState(filePath, "Asia/Shanghai");
 
     await store.recordProactiveText("10001", firstDay);
     await store.recordReaction("10001", firstDay);
@@ -69,6 +74,6 @@ describe("主动互动持久化状态", () => {
 
   it("按指定时区生成日键", () => {
     const timestamp = Date.parse("2026-07-19T17:00:00.000Z");
-    expect(formatDayKey(timestamp, "Asia/Singapore")).toBe("2026-07-20");
+    expect(formatDayKey(timestamp, "Asia/Shanghai")).toBe("2026-07-20");
   });
 });

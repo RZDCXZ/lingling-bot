@@ -42,6 +42,15 @@ async function main(): Promise<void> {
     proactiveDailyTextLimit: config.proactive.dailyTextLimit,
     proactiveActiveHours: `${String(Math.floor(config.proactive.activeStartMinutes / 60)).padStart(2, "0")}:${String(config.proactive.activeStartMinutes % 60).padStart(2, "0")}-${String(Math.floor(config.proactive.activeEndMinutes / 60)).padStart(2, "0")}:${String(config.proactive.activeEndMinutes % 60).padStart(2, "0")}`,
     proactiveHotTopicEnabled: config.proactive.hotTopicEnabled,
+    morningRadarEnabled: config.proactive.morningRadarEnabled,
+    morningRadarTime: formatMinutes(config.proactive.morningRadarMinutes),
+    dailyRoastEnabled: config.proactive.dailyRoastEnabled,
+    dailyRoastTime: formatMinutes(config.proactive.dailyRoastMinutes),
+    dailyLongevityEnabled: config.longevity.enabled,
+    dailyLongevityReminderTime: formatMinutes(
+      config.longevity.reminderMinutes,
+    ),
+    dailyLongevitySendTime: formatMinutes(config.longevity.sendMinutes),
     groupReactionEnabled: config.reaction.enabled,
   });
 
@@ -56,3 +65,7 @@ main().catch((error: unknown) => {
   });
   process.exitCode = 1;
 });
+
+function formatMinutes(minutes: number): string {
+  return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+}

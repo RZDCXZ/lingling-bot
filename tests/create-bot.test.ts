@@ -48,6 +48,92 @@ function createConfig(overrides: Record<string, string | undefined> = {}) {
 }
 
 describe("OneBot 机器人运行时", () => {
+  it("在征集窗口接收主号投稿并于二十二点审核后发送到目标群", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-19T13:55:00.000Z"));
+    const aiImage = {
+      dataUrl: "data:image/png;base64,iVBORw0KGgo=",
+      detail: "auto" as const,
+    };
+    const generateReply = vi
+      .fn<AiService["generateReply"]>()
+      .mockResolvedValue("[[LONGEVITY:1]]今晚这份养生内容，建议反复观看喵~");
+    const load = vi.fn<ImageLoader["load"]>().mockResolvedValue([aiImage]);
+    const client = new FakeOneBotClient();
+    const runtime = createBotRuntime(
+      createConfig({
+        ONEBOT_ALLOWED_PRIVATE_USER_IDS: "20002",
+        DAILY_LONGEVITY_ENABLED: "true",
+        DAILY_LONGEVITY_SUBMITTER_USER_ID: "20002",
+        DAILY_LONGEVITY_TARGET_GROUP_IDS: "10001",
+      }),
+      { generateReply },
+      new ConversationMemory({ maxTurns: 4 }),
+      client,
+      { load },
+    );
+
+    try {
+      await runtime.start();
+      await vi.advanceTimersByTimeAsync(0);
+      client.callMock.mockClear();
+
+      await client.emit({
+        post_type: "message",
+        message_type: "private",
+        self_id: "90009",
+        user_id: "20002",
+        message_id: "longevity-1",
+        message: [
+          {
+            type: "image",
+            data: { file: "submitted.png", file_size: 1024 },
+          },
+        ],
+      });
+
+      expect(load).toHaveBeenCalledOnce();
+      expect(generateReply).not.toHaveBeenCalled();
+      expect(client.callMock).toHaveBeenCalledWith("send_private_msg", {
+        user_id: "20002",
+        message: [
+          {
+            type: "text",
+            data: { text: expect.stringContaining("今晚已缓存 1/6 张") },
+          },
+        ],
+      });
+
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1_000);
+
+      expect(generateReply).toHaveBeenCalledWith(
+        [
+          {
+            role: "user",
+            content: "submitted_image_count: 1",
+            images: [aiImage],
+          },
+        ],
+        { mode: "daily-longevity" },
+      );
+      expect(client.callMock).toHaveBeenCalledWith("send_group_msg", {
+        group_id: "10001",
+        message: [
+          {
+            type: "text",
+            data: {
+              text: expect.stringMatching(/【延年益寿】[\s\S]*建议反复观看/),
+            },
+          },
+          { type: "image", data: { file: "base64://iVBORw0KGgo=" } },
+        ],
+      });
+    } finally {
+      runtime.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it("把白名单群中的 @消息交给 AI 并回复原消息", async () => {
     const generateReply = vi
       .fn<AiService["generateReply"]>()

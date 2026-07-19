@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   sendOneBotGroupMessage,
   sendOneBotGroupText,
+  sendOneBotPrivateMessage,
   sendOneBotReply,
   sendOneBotPrivateText,
   splitReplyText,
@@ -64,6 +65,25 @@ describe("QQ 回复分段", () => {
     });
   });
 
+  it("群定时环节可在普通消息中附带多张图片", async () => {
+    const call = vi.fn().mockResolvedValue({ message_id: "reply" });
+    const client: OneBotActionCaller = { call };
+
+    await sendOneBotGroupMessage(client, "10001", "【延年益寿】\n今晚份", [
+      { dataUrl: "data:image/png;base64,aW1hZ2Ux" },
+      { dataUrl: "data:image/jpeg;base64,aW1hZ2Uy" },
+    ]);
+
+    expect(call).toHaveBeenCalledWith("send_group_msg", {
+      group_id: "10001",
+      message: [
+        { type: "text", data: { text: "【延年益寿】\n今晚份" } },
+        { type: "image", data: { file: "base64://aW1hZ2Ux" } },
+        { type: "image", data: { file: "base64://aW1hZ2Uy" } },
+      ],
+    });
+  });
+
   it("通过私聊接口直接回复白名单好友", async () => {
     const call = vi.fn().mockResolvedValue({ message_id: "reply" });
     const client: OneBotActionCaller = { call };
@@ -77,6 +97,20 @@ describe("QQ 回复分段", () => {
     expect(call).toHaveBeenCalledWith("send_private_msg", {
       user_id: "20002",
       message: [{ type: "text", data: { text: "你好" } }],
+    });
+  });
+
+  it("定时任务可主动私聊指定好友", async () => {
+    const call = vi.fn().mockResolvedValue({ message_id: "reply" });
+    const client: OneBotActionCaller = { call };
+
+    await sendOneBotPrivateMessage(client, "20002", "【延年益寿】开始征集");
+
+    expect(call).toHaveBeenCalledWith("send_private_msg", {
+      user_id: "20002",
+      message: [
+        { type: "text", data: { text: "【延年益寿】开始征集" } },
+      ],
     });
   });
 

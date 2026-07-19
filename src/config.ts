@@ -37,7 +37,7 @@ const timeOfDayFromEnv = (fallback: string) =>
 const timeZoneSchema = z
   .string()
   .trim()
-  .default("Asia/Singapore")
+  .default("Asia/Shanghai")
   .superRefine((value, context) => {
     try {
       new Intl.DateTimeFormat("en-US", { timeZone: value }).format();
@@ -119,6 +119,17 @@ const numericIdListSchema = (label: string) =>
       return ids;
     });
 
+const optionalNumericIdSchema = (label: string) =>
+  z
+    .string()
+    .trim()
+    .default("")
+    .superRefine((value, context) => {
+      if (value && !/^\d+$/.test(value)) {
+        context.addIssue({ code: "custom", message: `${label}只能包含数字` });
+      }
+    });
+
 const envSchema = z
   .object({
     ONEBOT_WS_URL: oneBotUrlSchema.default("ws://127.0.0.1:3001"),
@@ -148,7 +159,7 @@ const envSchema = z
       .trim()
       .min(1)
       .default(DEFAULT_SYSTEM_PROMPT),
-    CONVERSATION_MAX_TURNS: integerFromEnv(8, 1, 50),
+    CONVERSATION_MAX_TURNS: integerFromEnv(20, 1, 50),
     CONVERSATION_TTL_MS: integerFromEnv(
       24 * 60 * 60 * 1_000,
       60_000,
@@ -193,7 +204,7 @@ const envSchema = z
       24 * 60 * 60 * 1_000,
     ),
     PROACTIVE_REVIVAL_PROBABILITY: numberFromEnv(0.2, 0, 1),
-    PROACTIVE_HOT_TOPIC_ENABLED: booleanFromEnv(true),
+    PROACTIVE_HOT_TOPIC_ENABLED: booleanFromEnv(false),
     PROACTIVE_HOT_TOPIC_INTERVAL_MS: integerFromEnv(
       24 * 60 * 60 * 1_000,
       60 * 60 * 1_000,
@@ -213,6 +224,27 @@ const envSchema = z
       "AI,明日方舟：终末地,绝区零,异环,鸣潮",
       "热点主题",
     ),
+    MORNING_RADAR_ENABLED: booleanFromEnv(true),
+    MORNING_RADAR_TIME: timeOfDayFromEnv("08:00"),
+    MORNING_RADAR_CATCH_UP_END: timeOfDayFromEnv("09:00"),
+    MORNING_RADAR_LOCATION: z
+      .string()
+      .trim()
+      .min(1, "早间情报雷达地点不能为空")
+      .max(100, "早间情报雷达地点过长")
+      .default("中国四川成都"),
+    DAILY_ROAST_ENABLED: booleanFromEnv(true),
+    DAILY_ROAST_TIME: timeOfDayFromEnv("21:00"),
+    DAILY_ROAST_CATCH_UP_END: timeOfDayFromEnv("22:00"),
+    DAILY_ROAST_MIN_MESSAGES: integerFromEnv(3, 1, 50),
+    DAILY_ROAST_MAX_MESSAGES: integerFromEnv(120, 10, 300),
+    DAILY_LONGEVITY_ENABLED: booleanFromEnv(false),
+    DAILY_LONGEVITY_SUBMITTER_USER_ID: optionalNumericIdSchema("投稿人 QQ 号"),
+    DAILY_LONGEVITY_TARGET_GROUP_IDS: numericIdListSchema("延年益寿目标群号"),
+    DAILY_LONGEVITY_REMINDER_TIME: timeOfDayFromEnv("21:50"),
+    DAILY_LONGEVITY_SEND_TIME: timeOfDayFromEnv("22:00"),
+    DAILY_LONGEVITY_CATCH_UP_END: timeOfDayFromEnv("22:10"),
+    DAILY_LONGEVITY_MAX_IMAGES: integerFromEnv(6, 1, 12),
     GROUP_REACTION_ENABLED: booleanFromEnv(true),
     GROUP_REACTION_PROBABILITY: numberFromEnv(0.12, 0, 1),
     GROUP_REACTION_COOLDOWN_MS: integerFromEnv(
@@ -266,6 +298,77 @@ const envSchema = z
         message: "不能少于群聊参与上下文条数",
       });
     }
+    if (value.MORNING_RADAR_TIME >= value.MORNING_RADAR_CATCH_UP_END) {
+      context.addIssue({
+        code: "custom",
+        path: ["MORNING_RADAR_CATCH_UP_END"],
+        message: "必须晚于早间情报雷达发送时间",
+      });
+    }
+    if (value.DAILY_ROAST_TIME >= value.DAILY_ROAST_CATCH_UP_END) {
+      context.addIssue({
+        code: "custom",
+        path: ["DAILY_ROAST_CATCH_UP_END"],
+        message: "必须晚于批斗大会发送时间",
+      });
+    }
+    if (value.DAILY_ROAST_MIN_MESSAGES > value.DAILY_ROAST_MAX_MESSAGES) {
+      context.addIssue({
+        code: "custom",
+        path: ["DAILY_ROAST_MAX_MESSAGES"],
+        message: "不能少于批斗大会最少消息数",
+      });
+    }
+    if (value.DAILY_LONGEVITY_REMINDER_TIME >= value.DAILY_LONGEVITY_SEND_TIME) {
+      context.addIssue({
+        code: "custom",
+        path: ["DAILY_LONGEVITY_SEND_TIME"],
+        message: "必须晚于延年益寿征集时间",
+      });
+    }
+    if (value.DAILY_LONGEVITY_SEND_TIME >= value.DAILY_LONGEVITY_CATCH_UP_END) {
+      context.addIssue({
+        code: "custom",
+        path: ["DAILY_LONGEVITY_CATCH_UP_END"],
+        message: "必须晚于延年益寿发送时间",
+      });
+    }
+    if (value.DAILY_LONGEVITY_ENABLED) {
+      if (!value.DAILY_LONGEVITY_SUBMITTER_USER_ID) {
+        context.addIssue({
+          code: "custom",
+          path: ["DAILY_LONGEVITY_SUBMITTER_USER_ID"],
+          message: "启用延年益寿时必须填写投稿人 QQ 号",
+        });
+      } else if (
+        !value.ONEBOT_ALLOWED_PRIVATE_USER_IDS.includes(
+          value.DAILY_LONGEVITY_SUBMITTER_USER_ID,
+        )
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["DAILY_LONGEVITY_SUBMITTER_USER_ID"],
+          message: "投稿人必须同时位于私聊白名单",
+        });
+      }
+      if (value.DAILY_LONGEVITY_TARGET_GROUP_IDS.length === 0) {
+        context.addIssue({
+          code: "custom",
+          path: ["DAILY_LONGEVITY_TARGET_GROUP_IDS"],
+          message: "启用延年益寿时至少填写一个目标群",
+        });
+      }
+      const outsideWhitelist = value.DAILY_LONGEVITY_TARGET_GROUP_IDS.filter(
+        (groupId) => !value.ONEBOT_ALLOWED_GROUP_IDS.includes(groupId),
+      );
+      if (outsideWhitelist.length > 0) {
+        context.addIssue({
+          code: "custom",
+          path: ["DAILY_LONGEVITY_TARGET_GROUP_IDS"],
+          message: "目标群必须全部位于群白名单",
+        });
+      }
+    }
   });
 
 export interface AppConfig {
@@ -318,6 +421,25 @@ export interface AppConfig {
     hotTopicInitialMinMs: number;
     hotTopicInitialMaxMs: number;
     hotTopics: readonly string[];
+    morningRadarEnabled: boolean;
+    morningRadarMinutes: number;
+    morningRadarCatchUpEndMinutes: number;
+    morningRadarLocation: string;
+    dailyRoastEnabled: boolean;
+    dailyRoastMinutes: number;
+    dailyRoastCatchUpEndMinutes: number;
+    dailyRoastMinMessages: number;
+    dailyRoastMaxMessages: number;
+  };
+  longevity: {
+    enabled: boolean;
+    timeZone: string;
+    submitterUserId: string;
+    targetGroupIds: readonly string[];
+    reminderMinutes: number;
+    sendMinutes: number;
+    catchUpEndMinutes: number;
+    maxImages: number;
   };
   reaction: {
     enabled: boolean;
@@ -401,6 +523,25 @@ export function parseConfig(
       hotTopicInitialMinMs: parsed.PROACTIVE_HOT_TOPIC_INITIAL_MIN_MS,
       hotTopicInitialMaxMs: parsed.PROACTIVE_HOT_TOPIC_INITIAL_MAX_MS,
       hotTopics: parsed.PROACTIVE_HOT_TOPICS,
+      morningRadarEnabled: parsed.MORNING_RADAR_ENABLED,
+      morningRadarMinutes: parsed.MORNING_RADAR_TIME,
+      morningRadarCatchUpEndMinutes: parsed.MORNING_RADAR_CATCH_UP_END,
+      morningRadarLocation: parsed.MORNING_RADAR_LOCATION,
+      dailyRoastEnabled: parsed.DAILY_ROAST_ENABLED,
+      dailyRoastMinutes: parsed.DAILY_ROAST_TIME,
+      dailyRoastCatchUpEndMinutes: parsed.DAILY_ROAST_CATCH_UP_END,
+      dailyRoastMinMessages: parsed.DAILY_ROAST_MIN_MESSAGES,
+      dailyRoastMaxMessages: parsed.DAILY_ROAST_MAX_MESSAGES,
+    },
+    longevity: {
+      enabled: parsed.DAILY_LONGEVITY_ENABLED,
+      timeZone: parsed.PROACTIVE_TIME_ZONE,
+      submitterUserId: parsed.DAILY_LONGEVITY_SUBMITTER_USER_ID,
+      targetGroupIds: parsed.DAILY_LONGEVITY_TARGET_GROUP_IDS,
+      reminderMinutes: parsed.DAILY_LONGEVITY_REMINDER_TIME,
+      sendMinutes: parsed.DAILY_LONGEVITY_SEND_TIME,
+      catchUpEndMinutes: parsed.DAILY_LONGEVITY_CATCH_UP_END,
+      maxImages: parsed.DAILY_LONGEVITY_MAX_IMAGES,
     },
     reaction: {
       enabled: parsed.GROUP_REACTION_ENABLED,

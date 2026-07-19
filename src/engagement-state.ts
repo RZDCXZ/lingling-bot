@@ -12,6 +12,9 @@ export interface EngagementSnapshot {
   lastProactiveTextAt?: number;
   lastReactionAt?: number;
   nextHotTopicAt?: number;
+  lastMorningRadarDayKey?: string;
+  lastDailyRoastDayKey?: string;
+  lastRoastSenderId?: string;
   recentHotTopics: readonly string[];
 }
 
@@ -28,6 +31,12 @@ export interface EngagementStatePort {
     timestamp: number,
     now: number,
   ): Promise<void>;
+  recordMorningRadarAttempt(groupId: string, now: number): Promise<void>;
+  recordDailyRoastAttempt(
+    groupId: string,
+    now: number,
+    senderId?: string,
+  ): Promise<void>;
 }
 
 interface StoredGroupState {
@@ -37,6 +46,9 @@ interface StoredGroupState {
   lastProactiveTextAt?: number;
   lastReactionAt?: number;
   nextHotTopicAt?: number;
+  lastMorningRadarDayKey?: string;
+  lastDailyRoastDayKey?: string;
+  lastRoastSenderId?: string;
   recentHotTopics: string[];
 }
 
@@ -99,6 +111,25 @@ export class PersistentEngagementState implements EngagementStatePort {
     await this.ensureLoaded();
     const record = this.getMutableRecord(groupId, now);
     record.nextHotTopicAt = timestamp;
+    await this.persist();
+  }
+
+  async recordMorningRadarAttempt(groupId: string, now: number): Promise<void> {
+    await this.ensureLoaded();
+    const record = this.getMutableRecord(groupId, now);
+    record.lastMorningRadarDayKey = formatDayKey(now, this.timeZone);
+    await this.persist();
+  }
+
+  async recordDailyRoastAttempt(
+    groupId: string,
+    now: number,
+    senderId?: string,
+  ): Promise<void> {
+    await this.ensureLoaded();
+    const record = this.getMutableRecord(groupId, now);
+    record.lastDailyRoastDayKey = formatDayKey(now, this.timeZone);
+    if (senderId) record.lastRoastSenderId = senderId;
     await this.persist();
   }
 
@@ -183,6 +214,9 @@ function isStoredGroupState(input: unknown): input is StoredGroupState {
     isOptionalTimestamp(input.lastProactiveTextAt) &&
     isOptionalTimestamp(input.lastReactionAt) &&
     isOptionalTimestamp(input.nextHotTopicAt) &&
+    isOptionalString(input.lastMorningRadarDayKey) &&
+    isOptionalString(input.lastDailyRoastDayKey) &&
+    isOptionalString(input.lastRoastSenderId) &&
     Array.isArray(input.recentHotTopics) &&
     input.recentHotTopics.every((item) => typeof item === "string")
   );
@@ -190,6 +224,10 @@ function isStoredGroupState(input: unknown): input is StoredGroupState {
 
 function isOptionalTimestamp(input: unknown): boolean {
   return input === undefined || (typeof input === "number" && Number.isFinite(input));
+}
+
+function isOptionalString(input: unknown): boolean {
+  return input === undefined || typeof input === "string";
 }
 
 function isNonNegativeInteger(input: unknown): boolean {

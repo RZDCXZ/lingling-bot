@@ -243,6 +243,77 @@ describe("Codex 提示词", () => {
     expect(prompt).toContain("最近 48 小时");
     expect(prompt).toContain("来源链接");
   });
+
+  it("早间情报雷达搜索成都天气、实用建议和指定领域资讯", () => {
+    const prompt = buildCodexPrompt(
+      "猫娘人设",
+      [{ role: "user", content: "morning_radar_date: 2026-07-19" }],
+      "morning-radar",
+      {
+        weatherLocation: "中国四川成都",
+        hotTopics: ["AI", "明日方舟：终末地", "绝区零", "异环", "鸣潮"],
+      },
+    );
+
+    expect(prompt).toContain("中国四川成都");
+    expect(prompt).toContain("必须明确出现“情报雷达”四个字");
+    expect(prompt).toContain("立即使用实时网页搜索");
+    expect(prompt).toContain("最高最低温");
+    expect(prompt).toContain("穿衣、带伞或通勤建议");
+    expect(prompt).toContain("最近 24 小时");
+    expect(prompt).toContain("最多三条");
+  });
+
+  it("批斗大会允许无厘头罪名但禁止编造黑料和攻击敏感属性", () => {
+    const prompt = buildCodexPrompt(
+      "猫娘人设",
+      [
+        {
+          role: "user",
+          content:
+            'daily_roast_candidates_json: [{"label":"p1","senderName":"小明","messages":["今天绝不加班","老板来消息了，我先撤回"]}]',
+        },
+      ],
+      "daily-roast",
+    );
+
+    expect(prompt).toContain("每个候选代表一位群友及其当天缓存的全部发言");
+    expect(prompt).toContain("先根据整体发言判断批法");
+    expect(prompt).toContain("才可以安一个让人一眼看出是玩笑的无厘头罪名");
+    expect(prompt).toContain("必须锚定此人当天的真实发言");
+    expect(prompt).toContain("不能编造真实事件、黑料或违法行为");
+    expect(prompt).toContain("严禁攻击身份、外貌、家庭、健康");
+    expect(prompt).toContain("不要使用主持人语气");
+    expect(prompt).toContain("必须明确出现“批斗大会”四个字");
+    expect(prompt).toContain("即便候选很多，也只批斗一个");
+    expect(prompt).toContain("[[ROAST:pN]]");
+    expect(prompt).toContain("不得使用任何工具");
+  });
+
+  it("延年益寿模式逐图审核并只返回安全图片序号和暧昧配文", () => {
+    const prompt = buildCodexPrompt(
+      "猫娘人设",
+      [
+        {
+          role: "user",
+          content: "submitted_image_count: 2",
+          images: [
+            { dataUrl: "data:image/png;base64,YQ==", detail: "auto" },
+            { dataUrl: "data:image/png;base64,Yg==", detail: "auto" },
+          ],
+        },
+      ],
+      "daily-longevity",
+    );
+
+    expect(prompt).toContain("[[LONGEVITY:序号列表]]");
+    expect(prompt).toContain("明确为成年女性");
+    expect(prompt).toContain("排除真人照片");
+    expect(prompt).toContain("年龄不明或未成年感角色");
+    expect(prompt).toContain("略带暧昧但不能露骨");
+    expect(prompt).toContain("必须明确出现“延年益寿”四个字");
+    expect(prompt).toContain("本模式不得使用任何工具");
+  });
 });
 
 describe("Codex JSONL 输出", () => {

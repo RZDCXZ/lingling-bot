@@ -1,14 +1,17 @@
 import type { AiMessage, AiReplyResult, AiService } from "./ai/types.js";
 import type { AppConfig } from "./config.js";
-import type {
-  EngagementSnapshot,
-  EngagementStatePort,
+import {
+  formatDayKey,
+  type EngagementSnapshot,
+  type EngagementStatePort,
 } from "./engagement-state.js";
 
 const SILENT_MARKER = "[[SILENT]]";
 const REPLY_MARKER = "[[REPLY]]";
 const REACTION_PATTERN = /^\[\[REACTION:(\d{1,8})\]\]$/;
+const DAILY_ROAST_PATTERN = /^\[\[ROAST:(p\d+)\]\]\s*([\s\S]+)$/;
 const MAX_CONTEXT_LINE_CHARS = 1_000;
+const MAX_DAILY_ROAST_MESSAGE_CHARS = 240;
 const MAX_NEW_MESSAGES_WHILE_THINKING = 2;
 const OLD_JOKE_CONTEXT_MESSAGES = 4;
 const HOT_TOPIC_RETRY_WITHOUT_CONTEXT_MS = 60 * 60 * 1_000;
@@ -71,6 +74,14 @@ interface PendingQuestion {
   senderId: string;
 }
 
+interface DailyRoastMessage {
+  at: number;
+  dayKey: string;
+  senderId: string;
+  senderName: string;
+  content: string;
+}
+
 interface GroupState {
   history: TimedMessage[];
   humanMessagesSinceDecision: number;
@@ -80,6 +91,8 @@ interface GroupState {
   lastHumanAt?: number;
   pendingQuestion?: PendingQuestion;
   revivalDueAt?: number;
+  dailyRoastDayKey?: string;
+  dailyRoastMessages: DailyRoastMessage[];
   deciding: boolean;
 }
 
@@ -92,7 +105,7 @@ interface SchedulerRegistration {
 
 const DEFAULT_PROACTIVE_CONFIG: AppConfig["proactive"] = {
   enabled: false,
-  timeZone: "Asia/Singapore",
+  timeZone: "Asia/Shanghai",
   activeStartMinutes: 9 * 60,
   activeEndMinutes: 23 * 60 + 30,
   dailyTextLimit: 4,
@@ -104,11 +117,20 @@ const DEFAULT_PROACTIVE_CONFIG: AppConfig["proactive"] = {
   revivalMinSilenceMs: 60 * 60 * 1_000,
   revivalMaxSilenceMs: 2 * 60 * 60 * 1_000,
   revivalProbability: 0.2,
-  hotTopicEnabled: true,
+  hotTopicEnabled: false,
   hotTopicIntervalMs: 24 * 60 * 60 * 1_000,
   hotTopicInitialMinMs: 60 * 60 * 1_000,
   hotTopicInitialMaxMs: 3 * 60 * 60 * 1_000,
   hotTopics: ["AI", "明日方舟：终末地", "绝区零", "异环", "鸣潮"],
+  morningRadarEnabled: true,
+  morningRadarMinutes: 8 * 60,
+  morningRadarCatchUpEndMinutes: 9 * 60,
+  morningRadarLocation: "中国四川成都",
+  dailyRoastEnabled: true,
+  dailyRoastMinutes: 21 * 60,
+  dailyRoastCatchUpEndMinutes: 22 * 60,
+  dailyRoastMinMessages: 3,
+  dailyRoastMaxMessages: 120,
 };
 
 const DEFAULT_REACTION_CONFIG: AppConfig["reaction"] = {
@@ -134,7 +156,9 @@ export class GroupParticipationCoordinator {
     this.random = options.random ?? Math.random;
     this.proactive = options.proactive ?? DEFAULT_PROACTIVE_CONFIG;
     this.reaction = options.reaction ?? DEFAULT_REACTION_CONFIG;
-    this.engagementState = options.engagementState ?? new VolatileEngagementState();
+    this.engagementState =
+      options.engagementState ??
+      new VolatileEngagementState(this.proactive.timeZone);
   }
 
   observeHuman(message: ObservedGroupMessage): void {
@@ -145,6 +169,7 @@ export class GroupParticipationCoordinator {
 
     const now = this.now();
     const state = this.getState(message.groupId);
+    this.trackDailyRoastMessage(state, message, now);
     delete state.pendingQuestion;
     state.history.push({ at: now, message: { role: "user", content } });
     this.trimHistory(state);
@@ -250,16 +275,183 @@ export class GroupParticipationCoordinator {
     this.schedulerRunning = true;
     try {
       const now = this.now();
+      const fixedTaskHandled = new Set<string>();
       for (const groupId of registration.groupIds) {
         await this.ensureHotTopicSchedule(groupId, now);
+        if (await this.runFixedScheduledTask(groupId, registration, now)) {
+          fixedTaskHandled.add(groupId);
+        }
       }
       if (!isWithinActiveHours(now, this.proactive)) return;
 
       for (const groupId of registration.groupIds) {
+        if (fixedTaskHandled.has(groupId)) continue;
         await this.runGroupScheduledTask(groupId, registration, now);
       }
     } finally {
       this.schedulerRunning = false;
+    }
+  }
+
+  private async runFixedScheduledTask(
+    groupId: string,
+    registration: SchedulerRegistration,
+    now: number,
+  ): Promise<boolean> {
+    if (await this.runMorningRadar(groupId, registration, now)) return true;
+    return await this.runDailyRoast(groupId, registration, now);
+  }
+
+  private async runMorningRadar(
+    groupId: string,
+    registration: SchedulerRegistration,
+    now: number,
+  ): Promise<boolean> {
+    if (
+      !this.proactive.morningRadarEnabled ||
+      !isWithinTimeWindow(
+        now,
+        this.proactive.timeZone,
+        this.proactive.morningRadarMinutes,
+        this.proactive.morningRadarCatchUpEndMinutes,
+      )
+    ) {
+      return false;
+    }
+
+    const dayKey = formatDayKey(now, this.proactive.timeZone);
+    const snapshot = await this.engagementState.get(groupId, now);
+    if (snapshot.lastMorningRadarDayKey === dayKey) return false;
+
+    const state = this.getState(groupId);
+    if (state.deciding) return true;
+    if (!(await this.canSendProactiveText(groupId, state, true, false))) {
+      await this.engagementState.recordMorningRadarAttempt(groupId, now);
+      return true;
+    }
+
+    await this.engagementState.recordMorningRadarAttempt(groupId, now);
+    if (!registration.allowGeneration(groupId)) return true;
+
+    state.deciding = true;
+    try {
+      const result = await this.options.ai.generateReply(
+        [
+          {
+            role: "user",
+            content: `morning_radar_date: ${dayKey}`,
+          },
+        ],
+        {
+          mode: "morning-radar",
+          hotTopics: this.proactive.hotTopics,
+          weatherLocation: this.proactive.morningRadarLocation,
+        },
+      );
+      const answer = parseParticipationReply(result);
+      if (!answer) return true;
+      const titledAnswer = withScheduledTaskTitle(answer, "情报雷达");
+
+      await registration.ports.sendGroupText(groupId, titledAnswer);
+      this.recordBotReply(groupId, titledAnswer);
+      await this.engagementState.recordProactiveText(groupId, this.now());
+      return true;
+    } finally {
+      state.deciding = false;
+    }
+  }
+
+  private async runDailyRoast(
+    groupId: string,
+    registration: SchedulerRegistration,
+    now: number,
+  ): Promise<boolean> {
+    if (
+      !this.proactive.dailyRoastEnabled ||
+      !isWithinTimeWindow(
+        now,
+        this.proactive.timeZone,
+        this.proactive.dailyRoastMinutes,
+        this.proactive.dailyRoastCatchUpEndMinutes,
+      )
+    ) {
+      return false;
+    }
+
+    const dayKey = formatDayKey(now, this.proactive.timeZone);
+    const snapshot = await this.engagementState.get(groupId, now);
+    if (snapshot.lastDailyRoastDayKey === dayKey) return false;
+
+    const state = this.getState(groupId);
+    this.resetDailyRoastMessagesIfNeeded(state, dayKey);
+    if (state.deciding) return true;
+
+    const eligibleMessages = state.dailyRoastMessages.filter(
+      (message) => message.senderId !== snapshot.lastRoastSenderId,
+    );
+    const candidatePeople = groupDailyRoastMessagesBySender(eligibleMessages);
+    if (
+      state.dailyRoastMessages.length < this.proactive.dailyRoastMinMessages ||
+      candidatePeople.length === 0
+    ) {
+      await this.engagementState.recordDailyRoastAttempt(groupId, now);
+      state.dailyRoastMessages = [];
+      return true;
+    }
+
+    if (!(await this.canSendProactiveText(groupId, state, true, false))) {
+      await this.engagementState.recordDailyRoastAttempt(groupId, now);
+      state.dailyRoastMessages = [];
+      return true;
+    }
+
+    await this.engagementState.recordDailyRoastAttempt(groupId, now);
+    if (!registration.allowGeneration(groupId)) {
+      state.dailyRoastMessages = [];
+      return true;
+    }
+
+    const labeledCandidates = candidatePeople.map((person, index) => ({
+      label: `p${index + 1}`,
+      senderName: person.senderName,
+      messages: person.messages,
+    }));
+    const personByLabel = new Map(
+      candidatePeople.map((person, index) => [`p${index + 1}`, person]),
+    );
+
+    state.deciding = true;
+    try {
+      const result = await this.options.ai.generateReply(
+        [
+          {
+            role: "user",
+            content: `daily_roast_candidates_json: ${JSON.stringify(labeledCandidates)}`,
+          },
+        ],
+        { mode: "daily-roast" },
+      );
+      const roast = parseDailyRoastReply(
+        result,
+        labeledCandidates.map((candidate) => candidate.label),
+      );
+      if (!roast) return true;
+
+      const target = personByLabel.get(roast.label);
+      if (!target) return true;
+      const titledRoast = withScheduledTaskTitle(roast.text, "批斗大会");
+      await registration.ports.sendGroupText(groupId, titledRoast);
+      this.recordBotReply(groupId, titledRoast);
+      await this.engagementState.recordDailyRoastAttempt(
+        groupId,
+        this.now(),
+        target.senderId,
+      );
+      await this.engagementState.recordProactiveText(groupId, this.now());
+      return true;
+    } finally {
+      state.dailyRoastMessages = [];
+      state.deciding = false;
     }
   }
 
@@ -502,9 +694,17 @@ export class GroupParticipationCoordinator {
     groupId: string,
     state: GroupState,
     scheduled: boolean,
+    reserveFixedTasks = true,
   ): Promise<boolean> {
     const snapshot = await this.engagementState.get(groupId, this.now());
-    if (snapshot.proactiveTextCount >= this.proactive.dailyTextLimit) return false;
+    const reservedSlots = reserveFixedTasks
+      ? this.countPendingFixedTaskSlots(snapshot, this.now())
+      : 0;
+    const availableBeforeFixedTasks = Math.max(
+      0,
+      this.proactive.dailyTextLimit - reservedSlots,
+    );
+    if (snapshot.proactiveTextCount >= availableBeforeFixedTasks) return false;
 
     const cooldownMs = scheduled
       ? this.proactive.textCooldownMs
@@ -514,6 +714,63 @@ export class GroupParticipationCoordinator {
       snapshot.lastProactiveTextAt ?? 0,
     );
     return lastReplyAt === 0 || this.now() - lastReplyAt >= cooldownMs;
+  }
+
+  private countPendingFixedTaskSlots(
+    snapshot: EngagementSnapshot,
+    now: number,
+  ): number {
+    const dayKey = formatDayKey(now, this.proactive.timeZone);
+    const currentMinutes = getMinutesInTimeZone(now, this.proactive.timeZone);
+    let count = 0;
+    if (
+      this.proactive.morningRadarEnabled &&
+      snapshot.lastMorningRadarDayKey !== dayKey &&
+      currentMinutes < this.proactive.morningRadarCatchUpEndMinutes
+    ) {
+      count += 1;
+    }
+    if (
+      this.proactive.dailyRoastEnabled &&
+      snapshot.lastDailyRoastDayKey !== dayKey &&
+      currentMinutes < this.proactive.dailyRoastCatchUpEndMinutes
+    ) {
+      count += 1;
+    }
+    return count;
+  }
+
+  private trackDailyRoastMessage(
+    state: GroupState,
+    message: ObservedGroupMessage,
+    now: number,
+  ): void {
+    if (!this.proactive.enabled || !this.proactive.dailyRoastEnabled) return;
+
+    const dayKey = formatDayKey(now, this.proactive.timeZone);
+    this.resetDailyRoastMessagesIfNeeded(state, dayKey);
+    const content = message.content.replace(/\s+/g, " ").trim();
+    if (!content || content.startsWith("/") || content.length < 2) return;
+
+    state.dailyRoastMessages.push({
+      at: now,
+      dayKey,
+      senderId: message.senderId,
+      senderName: normalizeSenderName(message.senderName, message.senderId),
+      content: content.slice(0, MAX_DAILY_ROAST_MESSAGE_CHARS),
+    });
+    state.dailyRoastMessages = state.dailyRoastMessages.slice(
+      -this.proactive.dailyRoastMaxMessages,
+    );
+  }
+
+  private resetDailyRoastMessagesIfNeeded(
+    state: GroupState,
+    dayKey: string,
+  ): void {
+    if (state.dailyRoastDayKey === dayKey) return;
+    state.dailyRoastDayKey = dayKey;
+    state.dailyRoastMessages = [];
   }
 
   private async ensureHotTopicSchedule(
@@ -543,6 +800,7 @@ export class GroupParticipationCoordinator {
         humanMessagesSinceDecision: 0,
         humanMessagesSinceBot: 0,
         sequence: 0,
+        dailyRoastMessages: [],
         deciding: false,
       };
       this.states.set(groupId, state);
@@ -627,6 +885,19 @@ export function parseReactionReply(
   return match?.[1] && allowedIds.includes(match[1]) ? match[1] : null;
 }
 
+export function parseDailyRoastReply(
+  result: AiReplyResult,
+  allowedLabels: readonly string[],
+): { label: string; text: string } | null {
+  const text = (typeof result === "string" ? result : result.text).trim();
+  if (text === SILENT_MARKER) return null;
+  const match = DAILY_ROAST_PATTERN.exec(text);
+  const label = match?.[1];
+  const answer = match?.[2]?.trim();
+  if (!label || !answer || !allowedLabels.includes(label)) return null;
+  return { label, text: answer };
+}
+
 export function isWithinActiveHours(
   timestamp: number,
   config: Pick<
@@ -634,8 +905,31 @@ export function isWithinActiveHours(
     "activeEndMinutes" | "activeStartMinutes" | "timeZone"
   >,
 ): boolean {
+  return isWithinTimeWindow(
+    timestamp,
+    config.timeZone,
+    config.activeStartMinutes,
+    config.activeEndMinutes,
+  );
+}
+
+export function isWithinTimeWindow(
+  timestamp: number,
+  timeZone: string,
+  startMinutes: number,
+  endMinutes: number,
+): boolean {
+  const current = getMinutesInTimeZone(timestamp, timeZone);
+
+  if (startMinutes <= endMinutes) {
+    return current >= startMinutes && current < endMinutes;
+  }
+  return current >= startMinutes || current < endMinutes;
+}
+
+function getMinutesInTimeZone(timestamp: number, timeZone: string): number {
   const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: config.timeZone,
+    timeZone,
     hour: "2-digit",
     minute: "2-digit",
     hourCycle: "h23",
@@ -644,14 +938,7 @@ export function isWithinActiveHours(
   const minutes = Number(
     parts.find((part) => part.type === "minute")?.value ?? 0,
   );
-  const current = hours * 60 + minutes;
-
-  if (config.activeStartMinutes <= config.activeEndMinutes) {
-    return (
-      current >= config.activeStartMinutes && current < config.activeEndMinutes
-    );
-  }
-  return current >= config.activeStartMinutes || current < config.activeEndMinutes;
+  return hours * 60 + minutes;
 }
 
 function renderHumanMessage(message: ObservedGroupMessage): string {
@@ -685,6 +972,34 @@ function looksLikeOpenQuestion(content: string): boolean {
   );
 }
 
+function groupDailyRoastMessagesBySender(
+  messages: readonly DailyRoastMessage[],
+): Array<{ senderId: string; senderName: string; messages: string[] }> {
+  const people = new Map<
+    string,
+    { senderId: string; senderName: string; messages: string[] }
+  >();
+  for (const message of messages) {
+    const existing = people.get(message.senderId);
+    if (existing) {
+      existing.senderName = message.senderName;
+      existing.messages.push(message.content);
+      continue;
+    }
+    people.set(message.senderId, {
+      senderId: message.senderId,
+      senderName: message.senderName,
+      messages: [message.content],
+    });
+  }
+  return [...people.values()];
+}
+
+function withScheduledTaskTitle(text: string, title: string): string {
+  const marker = `【${title}】`;
+  return text.includes(marker) ? text : `${marker}\n${text}`;
+}
+
 function randomBetween(min: number, max: number, random: () => number): number {
   if (max <= min) return min;
   return Math.floor(min + random() * (max - min));
@@ -693,13 +1008,22 @@ function randomBetween(min: number, max: number, random: () => number): number {
 export class VolatileEngagementState implements EngagementStatePort {
   private readonly records = new Map<string, EngagementSnapshot>();
 
-  async get(groupId: string): Promise<EngagementSnapshot> {
-    return this.records.get(groupId) ?? {
-      dayKey: "volatile",
+  constructor(private readonly timeZone = "UTC") {}
+
+  async get(groupId: string, now = Date.now()): Promise<EngagementSnapshot> {
+    const dayKey = formatDayKey(now, this.timeZone);
+    const current = this.records.get(groupId);
+    if (current?.dayKey === dayKey) return current;
+
+    const next: EngagementSnapshot = {
+      ...current,
+      dayKey,
       proactiveTextCount: 0,
       reactionCount: 0,
-      recentHotTopics: [],
+      recentHotTopics: current?.recentHotTopics ?? [],
     };
+    this.records.set(groupId, next);
+    return next;
   }
 
   async recordProactiveText(
@@ -707,7 +1031,7 @@ export class VolatileEngagementState implements EngagementStatePort {
     now: number,
     hotTopicText?: string,
   ): Promise<void> {
-    const current = await this.get(groupId);
+    const current = await this.get(groupId, now);
     this.records.set(groupId, {
       ...current,
       proactiveTextCount: current.proactiveTextCount + 1,
@@ -719,7 +1043,7 @@ export class VolatileEngagementState implements EngagementStatePort {
   }
 
   async recordReaction(groupId: string, now: number): Promise<void> {
-    const current = await this.get(groupId);
+    const current = await this.get(groupId, now);
     this.records.set(groupId, {
       ...current,
       reactionCount: current.reactionCount + 1,
@@ -730,9 +1054,30 @@ export class VolatileEngagementState implements EngagementStatePort {
   async setNextHotTopicAt(
     groupId: string,
     timestamp: number,
-    _now: number,
+    now: number,
   ): Promise<void> {
-    const current = await this.get(groupId);
+    const current = await this.get(groupId, now);
     this.records.set(groupId, { ...current, nextHotTopicAt: timestamp });
+  }
+
+  async recordMorningRadarAttempt(groupId: string, now: number): Promise<void> {
+    const current = await this.get(groupId, now);
+    this.records.set(groupId, {
+      ...current,
+      lastMorningRadarDayKey: formatDayKey(now, this.timeZone),
+    });
+  }
+
+  async recordDailyRoastAttempt(
+    groupId: string,
+    now: number,
+    senderId?: string,
+  ): Promise<void> {
+    const current = await this.get(groupId, now);
+    this.records.set(groupId, {
+      ...current,
+      lastDailyRoastDayKey: formatDayKey(now, this.timeZone),
+      ...(senderId ? { lastRoastSenderId: senderId } : {}),
+    });
   }
 }

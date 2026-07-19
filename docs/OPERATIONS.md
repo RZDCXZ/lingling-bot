@@ -17,9 +17,9 @@
 | 人设 | 森林系猫娘“铃铃酱”，完整内容见 `docs/PERSONA.md` |
 | 图片输入 | JPG、PNG、WebP、GIF；单张最多 8 MB，一次最多 4 张 |
 | 图片输出 | 支持 Codex 生成/编辑图片，单次最多回传 1 张，按 OneBot 图片消息发送 |
-| 会话 | 每位好友或“群 + 成员”独立，默认保留最近 8 轮，闲置 24 小时过期 |
+| 会话 | 每位好友或“群 + 成员”独立，默认保留最近 20 轮，闲置 24 小时过期 |
 | 最近历史验收 | 私聊文字、私聊图片、双 QQ、入群、自我介绍和群白名单均通过；Codex 迁移后需按第 9 节复验 |
-| 当前代码验收 | 类型检查、构建、16 个测试文件 89 项测试，以及 `gpt-5.6-luna` + `medium` 真实 Codex 文字探针均通过；主动互动的真实群触发仍需观察 |
+| 当前代码验收 | 类型检查、构建、17 个测试文件 105 项测试，以及 `gpt-5.6-luna` + `medium` 真实 Codex 文字探针均通过；主动互动和定时任务的真实群触发仍需观察 |
 
 自我介绍已经由铃铃酱账号发送并在主号 QQ 界面确认：
 
@@ -61,7 +61,7 @@ CODEX_TIMEOUT_MS=300000
 CODEX_MAX_CONCURRENT=2
 CODEX_MAX_QUEUE=12
 AI_SYSTEM_PROMPT="多行铃铃酱人设"
-CONVERSATION_MAX_TURNS=8
+CONVERSATION_MAX_TURNS=20
 CONVERSATION_TTL_MS=86400000
 GROUP_PARTICIPATION_ENABLED=true
 GROUP_PARTICIPATION_MIN_MESSAGES=3
@@ -71,7 +71,7 @@ GROUP_PARTICIPATION_CONTEXT_MESSAGES=8
 GROUP_OLD_JOKE_MEMORY_MESSAGES=30
 
 PROACTIVE_ENGAGEMENT_ENABLED=true
-PROACTIVE_TIME_ZONE=Asia/Singapore
+PROACTIVE_TIME_ZONE=Asia/Shanghai
 PROACTIVE_ACTIVE_START=09:00
 PROACTIVE_ACTIVE_END=23:30
 PROACTIVE_DAILY_TEXT_LIMIT=4
@@ -82,9 +82,25 @@ PROACTIVE_REVIVAL_ENABLED=true
 PROACTIVE_REVIVAL_MIN_SILENCE_MS=3600000
 PROACTIVE_REVIVAL_MAX_SILENCE_MS=7200000
 PROACTIVE_REVIVAL_PROBABILITY=0.2
-PROACTIVE_HOT_TOPIC_ENABLED=true
+PROACTIVE_HOT_TOPIC_ENABLED=false
 PROACTIVE_HOT_TOPIC_INTERVAL_MS=86400000
 PROACTIVE_HOT_TOPICS=AI,明日方舟：终末地,绝区零,异环,鸣潮
+MORNING_RADAR_ENABLED=true
+MORNING_RADAR_TIME=08:00
+MORNING_RADAR_CATCH_UP_END=09:00
+MORNING_RADAR_LOCATION=中国四川成都
+DAILY_ROAST_ENABLED=true
+DAILY_ROAST_TIME=21:00
+DAILY_ROAST_CATCH_UP_END=22:00
+DAILY_ROAST_MIN_MESSAGES=3
+DAILY_ROAST_MAX_MESSAGES=120
+DAILY_LONGEVITY_ENABLED=true
+DAILY_LONGEVITY_SUBMITTER_USER_ID=本机私密主号
+DAILY_LONGEVITY_TARGET_GROUP_IDS=本机私密目标群号
+DAILY_LONGEVITY_REMINDER_TIME=21:50
+DAILY_LONGEVITY_SEND_TIME=22:00
+DAILY_LONGEVITY_CATCH_UP_END=22:10
+DAILY_LONGEVITY_MAX_IMAGES=6
 
 GROUP_REACTION_ENABLED=true
 GROUP_REACTION_PROBABILITY=0.12
@@ -195,10 +211,10 @@ pnpm restart
 - 其他项目中同样名为 `dist/index.js` 的 Node 服务。
 
 重启会清空内存会话，群成员需要重新开始上下文；白名单和人设不会丢失。当前默认
-每位成员保留最近 8 轮，最后一次访问后 24 小时未互动才过期。群聊互动按群在内存
-保留最多 30 条短期消息，重启后同样清空。每日主动次数、冷却时间、下次热点时间
-和最近 3 次热点摘要保存在 `data/group-engagement-state.json`，重启后继续生效，
-但其中不保存群友聊天正文。
+每位成员保留最近 20 轮，最后一次访问后 24 小时未互动才过期。群聊互动按群在内存
+保留最多 30 条短期消息，重启后同样清空。每日主动次数、冷却时间、固定任务日标记、
+上次批斗对象、下次热点时间和最近 3 次热点摘要保存在
+`data/group-engagement-state.json`，重启后继续生效，但其中不保存群友聊天正文。
 
 ## 6. 添加新群
 
@@ -264,25 +280,48 @@ GROUP_OLD_JOKE_MEMORY_MESSAGES=30
 
 ### 主动聊天组合
 
-主动调度只在 `09:00`～`23:30`（`Asia/Singapore`）运行，并遵守每群每天 4 条主动
-文字、主动文字间隔至少 10 分钟的总闸门。明确 `@铃铃酱` 的回复和私聊不占这 4 条。
-每天的计数按配置时区归零。
+普通主动调度在 `09:00`～`23:30`（`Asia/Shanghai`）运行；固定早间情报雷达可在
+`08:00`～`09:00` 触发。所有主动文字共同遵守每群每天 4 条、间隔至少 10 分钟的
+总闸门。明确 `@铃铃酱` 的回复和私聊不占这 4 条。每天的计数按配置时区归零。
 
 - 无人回答救场：开放式问题 3 分钟内没有任何群友接话时，Codex 判断是否引用原
   消息救场；只要有人继续说话就取消，避免抢答。
 - 冷场续聊：最后一条群消息后随机等待 1～2 小时，再以 20% 概率尝试一次；同一
   次冷场不会反复试探，也不发送“有人吗”。
-- 热点投喂：每 24 小时最多尝试一次，范围是 AI、终末地、绝区零、异环和鸣潮。
-  Codex 必须搜索最近 48 小时、交叉核验并附来源；没有值得聊的消息就潜水。首次
-  启动随机等待 1～3 小时，且群里至少要出现 3 条新的群友消息。
+- 早间情报雷达：每天 `08:00` 搜索成都天气并给出穿衣、带伞或通勤建议，同时筛选
+  最近 24 小时内最多 3 条 AI、终末地、绝区零、异环或鸣潮资讯。优先一手来源并
+  附链接；没有值得聊的资讯仍可只发天气，天气也无法可靠核验时跳过。进程在
+  `08:00`～`09:00` 才启动时会补发一次，同一天不会重复。
+- 批斗任务：每天 `21:00` 将当天缓存消息按群友归组，根据每个人整天发言的风格、
+  重复梗、前后反差和整体抽象程度选一人，直接发送一条友好批斗和吐槽；不根据
+  孤立单句断章取义，不主持活动、不介绍流程，
+  没有合适人选就跳过。Codex 根据原话决定正常吐槽，还是使用
+  明显虚构的无厘头罪名；不能为发癫而发癫，且必须锚定此人当天的真实发言，不得编造黑料、真实违法行为或攻击身份、外貌、家庭、
+  健康和隐私。连续两天尽量不批斗同一人，`21:00`～`22:00` 可补触发一次。
+- 延年益寿：每天 `21:50` 只私聊显式配置的投稿主号征集图片，`21:50`～`22:00`
+  收到的私聊图片会进入当晚内存队列，最多 6 张；`22:00` 由 Codex 逐图审核，
+  只把明确成年、非露骨、非真人的二次元图片连同一条暧昧但不露骨的配文发送到
+  显式目标群。没有投稿或全部拒绝时不发群消息。投稿人可用 `/延年益寿状态` 查看
+  数量，用 `/取消延年益寿` 清空。
+- 固定任务的群消息由程序兜底添加标题：`【情报雷达】`、`【批斗大会】`、
+  `【延年益寿】`。批斗标题后仍只有一条单人吐槽，不使用主持或流程公告腔。
+- 旧版随机热点投喂默认关闭；如手工启用，仍按原来的 24 小时节奏运行。
 - 旧梗回旋镖：较早片段只在与当前话题有清晰呼应时使用，不生硬翻旧账。
 - 轻量表情：对普通群消息先按 12% 本地概率抽样，再由 Codex 从配置的 QQ 表情 ID
   中选择一个或潜水；默认 5 分钟冷却、每天每群最多 12 个。它不会发送颜文字或
   表情包，也不会给问题、争执、负面内容或命令乱点表情。
 
-`PROACTIVE_ENGAGEMENT_ENABLED=false` 会关闭定时救场、冷场续聊、热点及主动时段
+批斗候选正文只保存在进程内存中，每群最多 120 条；到批斗尝试、自然日切换或进程
+重启时清空。持久状态只保存任务日期和上次目标 QQ 号，不保存聊天正文。
+
+延年益寿投稿图也只保存在内存中，审核发送、跨日或进程重启即清空，不写入会话
+记忆或项目数据文件。版权授权无法由程序核验，21:50 的提醒会要求投稿人只提交
+自己有权转发的图片。
+
+`PROACTIVE_ENGAGEMENT_ENABLED=false` 会关闭早报、批斗、定时救场、冷场续聊、热点及主动时段
 限制；普通话题参与和轻量表情仍可分别用 `GROUP_PARTICIPATION_ENABLED`、
 `GROUP_REACTION_ENABLED` 独立关闭。
+延年益寿由 `DAILY_LONGEVITY_ENABLED` 独立控制。
 
 ## 8. 图片识别、生成与编辑流程
 
@@ -328,6 +367,8 @@ pnpm qq:verify-macos
 - 用测试配置缩短等待后，确认无人回答救场会引用原问题，随后有群友接话则取消。
 - 确认冷场与热点不会在启动后立刻刷屏，热点正文带可打开的来源链接。
 - 确认轻量回应调用 QQ 消息表情，而不是发送颜文字、表情包或额外文字。
+- 临时缩短时间窗口，确认主号收到带 `【延年益寿】` 的征集私聊；投稿后状态数量
+  正确，22:00 只发送审核通过的图片，未投稿或全部拒绝时群里保持安静。
 - `/重置` 后旧上下文不再进入下一次请求。
 - 人设连续测试至少覆盖玩笑、闲聊和认真求助；三次回复不应都称呼“哥哥”、都走
   可爱风或都以“喵~”结尾，认真求助必须收起玩梗。

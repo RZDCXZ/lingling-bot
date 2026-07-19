@@ -9,6 +9,7 @@ import type {
 import {
   GroupParticipationCoordinator,
   isWithinActiveHours,
+  parseDailyRoastReply,
 } from "../src/group-participation.js";
 
 class MemoryEngagementState implements EngagementStatePort {
@@ -55,6 +56,27 @@ class MemoryEngagementState implements EngagementStatePort {
     const current = await this.get(groupId);
     this.records.set(groupId, { ...current, nextHotTopicAt: timestamp });
   }
+
+  async recordMorningRadarAttempt(groupId: string): Promise<void> {
+    const current = await this.get(groupId);
+    this.records.set(groupId, {
+      ...current,
+      lastMorningRadarDayKey: current.dayKey,
+    });
+  }
+
+  async recordDailyRoastAttempt(
+    groupId: string,
+    _now: number,
+    senderId?: string,
+  ): Promise<void> {
+    const current = await this.get(groupId);
+    this.records.set(groupId, {
+      ...current,
+      lastDailyRoastDayKey: current.dayKey,
+      ...(senderId ? { lastRoastSenderId: senderId } : {}),
+    });
+  }
 }
 
 const participationConfig = {
@@ -88,6 +110,15 @@ function proactive(
     hotTopicInitialMinMs: 3_600_000,
     hotTopicInitialMaxMs: 10_800_000,
     hotTopics: ["AI", "明日方舟：终末地", "绝区零", "异环", "鸣潮"],
+    morningRadarEnabled: false,
+    morningRadarMinutes: 8 * 60,
+    morningRadarCatchUpEndMinutes: 9 * 60,
+    morningRadarLocation: "中国四川成都",
+    dailyRoastEnabled: false,
+    dailyRoastMinutes: 21 * 60,
+    dailyRoastCatchUpEndMinutes: 22 * 60,
+    dailyRoastMinMessages: 3,
+    dailyRoastMaxMessages: 120,
     ...overrides,
   };
 }
@@ -170,6 +201,211 @@ describe("主动互动调度", () => {
       },
       "这个我会，答案是先重启试试喵~",
     );
+  });
+
+  it("每天中国时间八点发送一次成都天气和情报雷达", async () => {
+    const now = Date.parse("2026-07-19T00:00:00.000Z");
+    const generateReply = vi
+      .fn<AiService["generateReply"]>()
+      .mockResolvedValue(
+        "[[REPLY]]成都今天 27～34℃，午后可能下雨，哥哥们记得带伞。AI 圈今天有个新瓜喵~",
+      );
+    const engagementState = new MemoryEngagementState();
+    const coordinator = new GroupParticipationCoordinator({
+      ai: { generateReply },
+      config: participationConfig,
+      proactive: proactive({
+        timeZone: "Asia/Shanghai",
+        activeStartMinutes: 9 * 60,
+        hotTopicEnabled: false,
+        unansweredEnabled: false,
+        revivalEnabled: false,
+        morningRadarEnabled: true,
+      }),
+      reaction: reactionDisabled,
+      engagementState,
+      now: () => now,
+      random: () => 0,
+    });
+    const ports = scheduledPorts();
+    const registration = {
+      groupIds: ["10001"],
+      ports,
+      allowGeneration: () => true,
+    };
+
+    await coordinator.runScheduledTick(registration);
+    await coordinator.runScheduledTick(registration);
+
+    expect(generateReply).toHaveBeenCalledOnce();
+    expect(generateReply).toHaveBeenCalledWith(expect.any(Array), {
+      mode: "morning-radar",
+      hotTopics: ["AI", "明日方舟：终末地", "绝区零", "异环", "鸣潮"],
+      weatherLocation: "中国四川成都",
+    });
+    expect(ports.sendGroupText).toHaveBeenCalledOnce();
+    expect(ports.sendGroupText).toHaveBeenCalledWith(
+      "10001",
+      expect.stringContaining("【情报雷达】"),
+    );
+    expect(await engagementState.get("10001")).toMatchObject({
+      lastMorningRadarDayKey: "2026-07-19",
+      proactiveTextCount: 1,
+    });
+  });
+
+  it("每天二十一点从当天真实发言中选择一人友好批斗", async () => {
+    let now = Date.parse("2026-07-19T12:00:00.000Z");
+    const generateReply = vi
+      .fn<AiService["generateReply"]>()
+      .mockResolvedValue(
+        "[[ROAST:p2]]群友2今天先说老板也是人，转头就让老板自己加班，整套人文关怀主打一个只关怀自己 😹 喵~",
+      );
+    const engagementState = new MemoryEngagementState();
+    const coordinator = new GroupParticipationCoordinator({
+      ai: { generateReply },
+      config: participationConfig,
+      proactive: proactive({
+        timeZone: "Asia/Shanghai",
+        hotTopicEnabled: false,
+        unansweredEnabled: false,
+        revivalEnabled: false,
+        dailyRoastEnabled: true,
+      }),
+      reaction: reactionDisabled,
+      engagementState,
+      now: () => now,
+      random: () => 0,
+    });
+    coordinator.observeHuman(message("今天绝不加班", 1));
+    coordinator.observeHuman(message("老板也是人", 2));
+    coordinator.observeHuman(message("所以应该让老板自己加班", 2));
+    coordinator.observeHuman(message("所以要让他自己干", 3));
+    now = Date.parse("2026-07-19T13:00:00.000Z");
+    const ports = scheduledPorts();
+    const registration = {
+      groupIds: ["10001"],
+      ports,
+      allowGeneration: () => true,
+    };
+
+    await coordinator.runScheduledTick(registration);
+    await coordinator.runScheduledTick(registration);
+
+    expect(generateReply).toHaveBeenCalledOnce();
+    expect(generateReply).toHaveBeenCalledWith(
+      [
+        {
+          role: "user",
+          content: expect.stringMatching(
+            /"label":"p2"[\s\S]*"messages":\["老板也是人","所以应该让老板自己加班"\]/,
+          ),
+        },
+      ],
+      { mode: "daily-roast" },
+    );
+    expect(ports.sendGroupText).toHaveBeenCalledWith(
+      "10001",
+      expect.stringMatching(/【批斗大会】[\s\S]*群友2今天先说老板也是人/),
+    );
+    expect(await engagementState.get("10001")).toMatchObject({
+      lastDailyRoastDayKey: "2026-07-19",
+      lastRoastSenderId: "20002",
+      proactiveTextCount: 1,
+    });
+  });
+
+  it("批斗大会没有合适人选时当天跳过且不反复调用", async () => {
+    let now = Date.parse("2026-07-19T12:00:00.000Z");
+    const generateReply = vi
+      .fn<AiService["generateReply"]>()
+      .mockResolvedValue("[[SILENT]]");
+    const engagementState = new MemoryEngagementState();
+    const coordinator = new GroupParticipationCoordinator({
+      ai: { generateReply },
+      config: participationConfig,
+      proactive: proactive({
+        timeZone: "Asia/Shanghai",
+        hotTopicEnabled: false,
+        unansweredEnabled: false,
+        revivalEnabled: false,
+        dailyRoastEnabled: true,
+      }),
+      reaction: reactionDisabled,
+      engagementState,
+      now: () => now,
+      random: () => 1,
+    });
+    coordinator.observeHuman(message("正常聊天一", 1));
+    coordinator.observeHuman(message("正常聊天二", 2));
+    coordinator.observeHuman(message("正常聊天三", 3));
+    now = Date.parse("2026-07-19T13:00:00.000Z");
+    const registration = {
+      groupIds: ["10001"],
+      ports: scheduledPorts(),
+      allowGeneration: () => true,
+    };
+
+    await coordinator.runScheduledTick(registration);
+    await coordinator.runScheduledTick(registration);
+
+    expect(generateReply).toHaveBeenCalledOnce();
+    expect(await engagementState.get("10001")).toMatchObject({
+      lastDailyRoastDayKey: "2026-07-19",
+      proactiveTextCount: 0,
+    });
+  });
+
+  it("晚间批斗前为固定任务预留每日主动文字名额", async () => {
+    let now = Date.parse("2026-07-19T12:00:00.000Z");
+    const generateReply = vi
+      .fn<AiService["generateReply"]>()
+      .mockResolvedValue("[[ROAST:p1]]群友1今天的自信已经提前替公司批准下班了喵~");
+    const engagementState = new MemoryEngagementState();
+    engagementState.records.set("10001", {
+      dayKey: "2026-07-19",
+      proactiveTextCount: 3,
+      reactionCount: 0,
+      nextHotTopicAt: now,
+      recentHotTopics: [],
+    });
+    const coordinator = new GroupParticipationCoordinator({
+      ai: { generateReply },
+      config: participationConfig,
+      proactive: proactive({
+        timeZone: "Asia/Shanghai",
+        dailyTextLimit: 4,
+        morningRadarEnabled: false,
+        dailyRoastEnabled: true,
+        unansweredEnabled: false,
+        revivalEnabled: false,
+      }),
+      reaction: reactionDisabled,
+      engagementState,
+      now: () => now,
+      random: () => 0,
+    });
+    coordinator.observeHuman(message("我宣布今天准点下班", 1));
+    coordinator.observeHuman(message("批准", 2));
+    coordinator.observeHuman(message("公司听见了吗", 3));
+    const ports = scheduledPorts();
+    const registration = {
+      groupIds: ["10001"],
+      ports,
+      allowGeneration: () => true,
+    };
+
+    await coordinator.runScheduledTick(registration);
+    expect(generateReply).not.toHaveBeenCalled();
+
+    now = Date.parse("2026-07-19T13:00:00.000Z");
+    await coordinator.runScheduledTick(registration);
+
+    expect(generateReply).toHaveBeenCalledOnce();
+    expect(generateReply).toHaveBeenCalledWith(expect.any(Array), {
+      mode: "daily-roast",
+    });
+    expect((await engagementState.get("10001")).proactiveTextCount).toBe(4);
   });
 
   it("问题之后已有群友说话时取消无人回答救场", async () => {
@@ -315,6 +551,17 @@ describe("主动互动调度", () => {
     });
 
     expect(generateReply).not.toHaveBeenCalled();
+  });
+});
+
+describe("批斗结果解析", () => {
+  it("只接受候选列表中的标签", () => {
+    expect(
+      parseDailyRoastReply("[[ROAST:p2]]批斗文案", ["p1", "p2"]),
+    ).toEqual({ label: "p2", text: "批斗文案" });
+    expect(
+      parseDailyRoastReply("[[ROAST:p9]]越界文案", ["p1", "p2"]),
+    ).toBeNull();
   });
 });
 

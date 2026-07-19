@@ -23,7 +23,7 @@ describe("parseConfig", () => {
     expect(config.ai.maxConcurrent).toBe(2);
     expect(config.ai.maxQueue).toBe(12);
     expect(config.ai.systemPrompt).toBe(DEFAULT_SYSTEM_PROMPT);
-    expect(config.conversation.maxTurns).toBe(8);
+    expect(config.conversation.maxTurns).toBe(20);
     expect(config.conversation.ttlMs).toBe(24 * 60 * 60 * 1_000);
     expect(config.groupParticipation).toEqual({
       enabled: true,
@@ -35,7 +35,7 @@ describe("parseConfig", () => {
     });
     expect(config.proactive).toEqual({
       enabled: true,
-      timeZone: "Asia/Singapore",
+      timeZone: "Asia/Shanghai",
       activeStartMinutes: 9 * 60,
       activeEndMinutes: 23 * 60 + 30,
       dailyTextLimit: 4,
@@ -47,11 +47,30 @@ describe("parseConfig", () => {
       revivalMinSilenceMs: 3_600_000,
       revivalMaxSilenceMs: 7_200_000,
       revivalProbability: 0.2,
-      hotTopicEnabled: true,
+      hotTopicEnabled: false,
       hotTopicIntervalMs: 86_400_000,
       hotTopicInitialMinMs: 3_600_000,
       hotTopicInitialMaxMs: 10_800_000,
       hotTopics: ["AI", "明日方舟：终末地", "绝区零", "异环", "鸣潮"],
+      morningRadarEnabled: true,
+      morningRadarMinutes: 8 * 60,
+      morningRadarCatchUpEndMinutes: 9 * 60,
+      morningRadarLocation: "中国四川成都",
+      dailyRoastEnabled: true,
+      dailyRoastMinutes: 21 * 60,
+      dailyRoastCatchUpEndMinutes: 22 * 60,
+      dailyRoastMinMessages: 3,
+      dailyRoastMaxMessages: 120,
+    });
+    expect(config.longevity).toEqual({
+      enabled: false,
+      timeZone: "Asia/Shanghai",
+      submitterUserId: "",
+      targetGroupIds: [],
+      reminderMinutes: 21 * 60 + 50,
+      sendMinutes: 22 * 60,
+      catchUpEndMinutes: 22 * 60 + 10,
+      maxImages: 6,
     });
     expect(config.reaction).toEqual({
       enabled: true,
@@ -140,7 +159,7 @@ describe("parseConfig", () => {
     });
   });
 
-  it("支持覆盖主动互动、热点和轻量表情策略", () => {
+  it("支持覆盖主动互动、定时任务和轻量表情策略", () => {
     const config = parseConfig(
       validEnv({
         PROACTIVE_ENGAGEMENT_ENABLED: "false",
@@ -151,6 +170,21 @@ describe("parseConfig", () => {
         PROACTIVE_UNANSWERED_DELAY_MS: "600000",
         PROACTIVE_REVIVAL_PROBABILITY: "0.1",
         PROACTIVE_HOT_TOPICS: "AI,绝区零",
+        MORNING_RADAR_TIME: "07:30",
+        MORNING_RADAR_CATCH_UP_END: "08:15",
+        MORNING_RADAR_LOCATION: "中国四川绵阳",
+        DAILY_ROAST_TIME: "20:30",
+        DAILY_ROAST_CATCH_UP_END: "21:15",
+        DAILY_ROAST_MIN_MESSAGES: "5",
+        DAILY_ROAST_MAX_MESSAGES: "80",
+        ONEBOT_ALLOWED_PRIVATE_USER_IDS: "20002",
+        DAILY_LONGEVITY_ENABLED: "true",
+        DAILY_LONGEVITY_SUBMITTER_USER_ID: "20002",
+        DAILY_LONGEVITY_TARGET_GROUP_IDS: "123456789",
+        DAILY_LONGEVITY_REMINDER_TIME: "21:40",
+        DAILY_LONGEVITY_SEND_TIME: "21:55",
+        DAILY_LONGEVITY_CATCH_UP_END: "22:05",
+        DAILY_LONGEVITY_MAX_IMAGES: "4",
         GROUP_REACTION_ENABLED: "false",
         GROUP_REACTION_PROBABILITY: "0.2",
         GROUP_REACTION_EMOJI_IDS: "66,76",
@@ -166,11 +200,28 @@ describe("parseConfig", () => {
       unansweredDelayMs: 600_000,
       revivalProbability: 0.1,
       hotTopics: ["AI", "绝区零"],
+      morningRadarMinutes: 7 * 60 + 30,
+      morningRadarCatchUpEndMinutes: 8 * 60 + 15,
+      morningRadarLocation: "中国四川绵阳",
+      dailyRoastMinutes: 20 * 60 + 30,
+      dailyRoastCatchUpEndMinutes: 21 * 60 + 15,
+      dailyRoastMinMessages: 5,
+      dailyRoastMaxMessages: 80,
     });
     expect(config.reaction).toMatchObject({
       enabled: false,
       probability: 0.2,
       emojiIds: ["66", "76"],
+    });
+    expect(config.longevity).toEqual({
+      enabled: true,
+      timeZone: "Asia/Shanghai",
+      submitterUserId: "20002",
+      targetGroupIds: ["123456789"],
+      reminderMinutes: 21 * 60 + 40,
+      sendMinutes: 21 * 60 + 55,
+      catchUpEndMinutes: 22 * 60 + 5,
+      maxImages: 4,
     });
   });
 
@@ -189,6 +240,41 @@ describe("parseConfig", () => {
     ).toThrow(ConfigurationError);
     expect(() =>
       parseConfig(validEnv({ GROUP_REACTION_EMOJI_IDS: "66,nope" })),
+    ).toThrow(ConfigurationError);
+    expect(() =>
+      parseConfig(
+        validEnv({
+          MORNING_RADAR_TIME: "09:00",
+          MORNING_RADAR_CATCH_UP_END: "08:00",
+        }),
+      ),
+    ).toThrow(ConfigurationError);
+    expect(() =>
+      parseConfig(
+        validEnv({
+          DAILY_LONGEVITY_ENABLED: "true",
+          DAILY_LONGEVITY_SUBMITTER_USER_ID: "20002",
+          DAILY_LONGEVITY_TARGET_GROUP_IDS: "123456789",
+        }),
+      ),
+    ).toThrow(ConfigurationError);
+    expect(() =>
+      parseConfig(
+        validEnv({
+          ONEBOT_ALLOWED_PRIVATE_USER_IDS: "20002",
+          DAILY_LONGEVITY_ENABLED: "true",
+          DAILY_LONGEVITY_SUBMITTER_USER_ID: "20002",
+          DAILY_LONGEVITY_TARGET_GROUP_IDS: "999999999",
+        }),
+      ),
+    ).toThrow(ConfigurationError);
+    expect(() =>
+      parseConfig(
+        validEnv({
+          DAILY_ROAST_MIN_MESSAGES: "20",
+          DAILY_ROAST_MAX_MESSAGES: "10",
+        }),
+      ),
     ).toThrow(ConfigurationError);
   });
 

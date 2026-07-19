@@ -4,6 +4,7 @@ const QQ_SAFE_CHUNK_LENGTH = 4_000;
 const QQ_MAX_REPLIES = 5;
 const TRUNCATED_SUFFIX = "\n（回复过长，已截断）";
 const MAX_REPLY_IMAGES = 2;
+const MAX_GROUP_ALBUM_IMAGES = 6;
 const MAX_REPLY_IMAGE_BYTES = 12 * 1024 * 1024;
 
 export interface OneBotReplyImage {
@@ -66,12 +67,35 @@ export async function sendOneBotGroupMessage(
   client: OneBotActionCaller,
   groupId: string,
   text: string,
+  images: readonly OneBotReplyImage[] = [],
+): Promise<void> {
+  const chunks = splitReplyText(text);
+  const messages = chunks.length > 0 ? chunks : images.length > 0 ? [""] : [];
+  const imageSegments = toImageSegments(images, MAX_GROUP_ALBUM_IMAGES);
+  for (const [index, chunk] of messages.entries()) {
+    const prefix = chunks.length > 1 ? `（${index + 1}/${chunks.length}）\n` : "";
+    const message: OneBotMessageSegment[] = [];
+    if (chunk) {
+      message.push({ type: "text", data: { text: `${prefix}${chunk}` } });
+    }
+    if (index === messages.length - 1) message.push(...imageSegments);
+    await client.call("send_group_msg", {
+      group_id: groupId,
+      message,
+    });
+  }
+}
+
+export async function sendOneBotPrivateMessage(
+  client: OneBotActionCaller,
+  userId: string,
+  text: string,
 ): Promise<void> {
   const chunks = splitReplyText(text);
   for (const [index, chunk] of chunks.entries()) {
     const prefix = chunks.length > 1 ? `（${index + 1}/${chunks.length}）\n` : "";
-    await client.call("send_group_msg", {
-      group_id: groupId,
+    await client.call("send_private_msg", {
+      user_id: userId,
       message: [{ type: "text", data: { text: `${prefix}${chunk}` } }],
     });
   }
@@ -162,9 +186,10 @@ export async function sendOneBotText(
 
 function toImageSegments(
   images: readonly OneBotReplyImage[],
+  maxImages = MAX_REPLY_IMAGES,
 ): OneBotMessageSegment[] {
-  if (images.length > MAX_REPLY_IMAGES) {
-    throw new RangeError(`单次最多发送 ${MAX_REPLY_IMAGES} 张生成图片`);
+  if (images.length > maxImages) {
+    throw new RangeError(`单次最多发送 ${maxImages} 张图片`);
   }
 
   return images.map((image) => {
