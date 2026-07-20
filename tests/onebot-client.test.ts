@@ -21,6 +21,45 @@ afterEach(async () => {
 });
 
 describe("OneBotWebSocketClient", () => {
+  it("首次连接失败时保持运行，并在 NapCat 就绪后自动重连", async () => {
+    const portReservation = new WebSocketServer({ port: 0 });
+    await new Promise<void>((resolve) =>
+      portReservation.once("listening", resolve),
+    );
+    const address = portReservation.address() as AddressInfo;
+    await new Promise<void>((resolve) => portReservation.close(() => resolve()));
+
+    const logger: Logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    };
+    const client = new OneBotWebSocketClient(
+      {
+        url: `ws://127.0.0.1:${address.port}`,
+        accessToken: "test-onebot-token",
+        reconnectIntervalMs: 20,
+        actionTimeoutMs: 1_000,
+      },
+      logger,
+    );
+
+    await expect(client.start(vi.fn())).resolves.toBeUndefined();
+
+    const server = new WebSocketServer({ port: address.port });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.once("listening", resolve));
+    await vi.waitFor(() =>
+      expect(logger.info).toHaveBeenCalledWith(
+        "[onebot] 已连接 NapCat WebSocket",
+        expect.any(Object),
+      ),
+    );
+
+    client.stop();
+  });
+
   it("携带 Bearer Token、接收事件并按 echo 匹配接口响应", async () => {
     const server = new WebSocketServer({ port: 0 });
     servers.push(server);

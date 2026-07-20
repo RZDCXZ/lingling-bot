@@ -37,9 +37,13 @@ export class OneBotWebSocketClient implements OneBotActionCaller {
     this.eventHandler = eventHandler;
     try {
       await this.connect();
-    } catch (error) {
-      this.stop();
-      throw error;
+    } catch (error: unknown) {
+      const normalized =
+        error instanceof Error ? error : new Error(String(error));
+      this.logger.warn("[onebot] 首次连接失败，将在后台重试", {
+        message: normalized.message,
+      });
+      this.scheduleReconnect();
     }
   }
 

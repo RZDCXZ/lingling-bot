@@ -376,7 +376,9 @@ GROUP_PARTICIPATION_ENABLED=false
 
 ### ECONNREFUSED 127.0.0.1:3001
 
-NapCat 未启动、正向 WebSocket 未启用，或端口不是 `3001`。
+NapCat 未启动、QQ 登录态失效、正向 WebSocket 未启用，或端口不是 `3001`。Docker
+核心会保持运行并每隔配置的重连时间自动尝试，不需要为此反复重建容器；先恢复
+NapCat 登录和 3001 监听即可。
 
 ### 群里 @机器人但没有回复
 
