@@ -254,7 +254,6 @@ const envSchema = z
     DAILY_LONGEVITY_ENABLED: booleanFromEnv(false),
     DAILY_LONGEVITY_SUBMITTER_USER_ID: optionalNumericIdSchema("投稿人 QQ 号"),
     DAILY_LONGEVITY_TARGET_GROUP_IDS: numericIdListSchema("延年益寿目标群号"),
-    DAILY_LONGEVITY_REMINDER_TIME: timeOfDayFromEnv("21:50"),
     DAILY_LONGEVITY_SEND_TIME: timeOfDayFromEnv("22:00"),
     DAILY_LONGEVITY_CATCH_UP_END: timeOfDayFromEnv("22:10"),
     DAILY_LONGEVITY_MAX_IMAGES: integerFromEnv(6, 1, 12),
@@ -333,13 +332,6 @@ const envSchema = z
         code: "custom",
         path: ["DAILY_ROAST_MAX_MESSAGES"],
         message: "不能少于批斗大会最少消息数",
-      });
-    }
-    if (value.DAILY_LONGEVITY_REMINDER_TIME >= value.DAILY_LONGEVITY_SEND_TIME) {
-      context.addIssue({
-        code: "custom",
-        path: ["DAILY_LONGEVITY_SEND_TIME"],
-        message: "必须晚于延年益寿征集时间",
       });
     }
     if (value.DAILY_LONGEVITY_SEND_TIME >= value.DAILY_LONGEVITY_CATCH_UP_END) {
@@ -452,7 +444,6 @@ export interface AppConfig {
     timeZone: string;
     submitterUserId: string;
     targetGroupIds: readonly string[];
-    reminderMinutes: number;
     sendMinutes: number;
     catchUpEndMinutes: number;
     maxImages: number;
@@ -555,7 +546,6 @@ export function parseConfig(
       timeZone: parsed.PROACTIVE_TIME_ZONE,
       submitterUserId: parsed.DAILY_LONGEVITY_SUBMITTER_USER_ID,
       targetGroupIds: parsed.DAILY_LONGEVITY_TARGET_GROUP_IDS,
-      reminderMinutes: parsed.DAILY_LONGEVITY_REMINDER_TIME,
       sendMinutes: parsed.DAILY_LONGEVITY_SEND_TIME,
       catchUpEndMinutes: parsed.DAILY_LONGEVITY_CATCH_UP_END,
       maxImages: parsed.DAILY_LONGEVITY_MAX_IMAGES,

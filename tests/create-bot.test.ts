@@ -52,9 +52,9 @@ function createConfig(overrides: Record<string, string | undefined> = {}) {
 }
 
 describe("OneBot 机器人运行时", () => {
-  it("在征集窗口接收主号投稿并于二十二点审核后发送到目标群", async () => {
+  it("主号随时提交后即使机器人重启也会在二十二点从归档目录读取并发送", async () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-19T13:55:00.000Z"));
+    vi.setSystemTime(new Date("2026-07-19T01:00:00.000Z"));
     const aiImage = {
       dataUrl: "data:image/png;base64,iVBORw0KGgo=",
       detail: "auto" as const,
@@ -63,37 +63,40 @@ describe("OneBot 机器人运行时", () => {
       .fn<AiService["generateReply"]>()
       .mockResolvedValue("[[LONGEVITY:1]]今晚这份养生内容，建议反复观看喵~");
     const load = vi.fn<ImageLoader["load"]>().mockResolvedValue([aiImage]);
-    const client = new FakeOneBotClient();
+    const initialClient = new FakeOneBotClient();
     const archiveRoot = join(
       tmpdir(),
       `qq-bot-create-bot-${process.pid}-${Date.now()}`,
     );
-    const runtime = createBotRuntime(
-      createConfig({
+    const runtimeConfig = createConfig({
         ONEBOT_ALLOWED_PRIVATE_USER_IDS: "20002",
         DAILY_LONGEVITY_ENABLED: "true",
         DAILY_LONGEVITY_SUBMITTER_USER_ID: "20002",
         DAILY_LONGEVITY_TARGET_GROUP_IDS: "10001",
         DAILY_LONGEVITY_ARCHIVE_DIR: archiveRoot,
-      }),
+      });
+    const initialRuntime = createBotRuntime(
+      runtimeConfig,
       { generateReply },
       new ConversationMemory({ maxTurns: 4 }),
-      client,
+      initialClient,
       { load },
     );
+    let restartedRuntime: ReturnType<typeof createBotRuntime> | undefined;
 
     try {
-      await runtime.start();
+      await initialRuntime.start();
       await vi.advanceTimersByTimeAsync(0);
-      client.callMock.mockClear();
+      initialClient.callMock.mockClear();
 
-      await client.emit({
+      await initialClient.emit({
         post_type: "message",
         message_type: "private",
         self_id: "90009",
         user_id: "20002",
         message_id: "longevity-1",
         message: [
+          { type: "text", data: { text: "/延年益寿" } },
           {
             type: "image",
             data: { file: "submitted.png", file_size: 1024 },
@@ -102,24 +105,51 @@ describe("OneBot 机器人运行时", () => {
       });
 
       expect(load).toHaveBeenCalledOnce();
-      expect(generateReply).not.toHaveBeenCalled();
-      expect(await readdir(join(archiveRoot, "2026-07-19"))).toEqual([
-        "001.png",
-      ]);
+      expect(generateReply).toHaveBeenCalledOnce();
+      expect(generateReply).toHaveBeenCalledWith(
+        [
+          {
+            role: "user",
+            content: "submitted_image_count: 1",
+            images: [aiImage],
+          },
+        ],
+        { mode: "daily-longevity" },
+      );
+      expect(
+        (await readdir(join(archiveRoot, "2026-07-19"))).filter(
+          (fileName) => !fileName.startsWith("."),
+        ),
+      ).toEqual(["001.png"]);
       await expect(
         readFile(join(archiveRoot, "2026-07-19", "001.png")),
       ).resolves.toEqual(Buffer.from("iVBORw0KGgo=", "base64"));
-      expect(client.callMock).toHaveBeenCalledWith("send_private_msg", {
+      expect(initialClient.callMock).toHaveBeenCalledWith("send_private_msg", {
         user_id: "20002",
         message: [
           {
             type: "text",
-            data: { text: expect.stringContaining("今晚已缓存 1/6 张") },
+            data: {
+              text: expect.stringMatching(
+                /已保存到 2026-07-19 归档文件夹[\s\S]*预审通过第 1 张[\s\S]*待发布 1\/6 张/,
+              ),
+            },
           },
         ],
       });
 
-      await vi.advanceTimersByTimeAsync(5 * 60 * 1_000);
+      initialRuntime.stop();
+      vi.setSystemTime(new Date("2026-07-19T13:59:00.000Z"));
+      const restartedClient = new FakeOneBotClient();
+      restartedRuntime = createBotRuntime(
+        runtimeConfig,
+        { generateReply },
+        new ConversationMemory({ maxTurns: 4 }),
+        restartedClient,
+        { load },
+      );
+      await restartedRuntime.start();
+      await vi.advanceTimersByTimeAsync(60 * 1_000);
 
       expect(generateReply).toHaveBeenCalledWith(
         [
@@ -131,22 +161,76 @@ describe("OneBot 机器人运行时", () => {
         ],
         { mode: "daily-longevity" },
       );
-      expect(client.callMock).toHaveBeenCalledWith("send_group_msg", {
-        group_id: "10001",
+      await vi.waitFor(() => {
+        expect(restartedClient.callMock).toHaveBeenCalledWith("send_group_msg", {
+          group_id: "10001",
+          message: [
+            {
+              type: "text",
+              data: {
+                text: expect.stringMatching(/【延年益寿】[\s\S]*建议反复观看/),
+              },
+            },
+            { type: "image", data: { file: "base64://iVBORw0KGgo=" } },
+          ],
+        });
+      });
+      await vi.waitFor(async () => {
+        const pending = JSON.parse(
+          await readFile(
+            join(archiveRoot, "2026-07-19", ".pending.json"),
+            "utf8",
+          ),
+        ) as { files: string[] };
+        expect(pending.files).toEqual([]);
+      });
+    } finally {
+      initialRuntime.stop();
+      restartedRuntime?.stop();
+      vi.useRealTimers();
+      await rm(archiveRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("主号只发送延年益寿命令时提示需要在同一条消息附图", async () => {
+    const generateReply = vi.fn<AiService["generateReply"]>();
+    const client = new FakeOneBotClient();
+    const runtime = createBotRuntime(
+      createConfig({
+        ONEBOT_ALLOWED_PRIVATE_USER_IDS: "20002",
+        DAILY_LONGEVITY_ENABLED: "true",
+        DAILY_LONGEVITY_SUBMITTER_USER_ID: "20002",
+        DAILY_LONGEVITY_TARGET_GROUP_IDS: "10001",
+      }),
+      { generateReply },
+      new ConversationMemory({ maxTurns: 4 }),
+      client,
+    );
+
+    try {
+      await runtime.start();
+      client.callMock.mockClear();
+      await client.emit({
+        post_type: "message",
+        message_type: "private",
+        self_id: "90009",
+        user_id: "20002",
+        message_id: "longevity-without-image",
+        message: [{ type: "text", data: { text: "/延年益寿" } }],
+      });
+
+      expect(generateReply).not.toHaveBeenCalled();
+      expect(client.callMock).toHaveBeenCalledWith("send_private_msg", {
+        user_id: "20002",
         message: [
           {
             type: "text",
-            data: {
-              text: expect.stringMatching(/【延年益寿】[\s\S]*建议反复观看/),
-            },
+            data: { text: expect.stringContaining("请在同一条消息附上图片") },
           },
-          { type: "image", data: { file: "base64://iVBORw0KGgo=" } },
         ],
       });
     } finally {
       runtime.stop();
-      vi.useRealTimers();
-      await rm(archiveRoot, { recursive: true, force: true });
     }
   });
 

@@ -47,9 +47,6 @@ async function main(): Promise<void> {
     dailyRoastEnabled: config.proactive.dailyRoastEnabled,
     dailyRoastTime: formatMinutes(config.proactive.dailyRoastMinutes),
     dailyLongevityEnabled: config.longevity.enabled,
-    dailyLongevityReminderTime: formatMinutes(
-      config.longevity.reminderMinutes,
-    ),
     dailyLongevitySendTime: formatMinutes(config.longevity.sendMinutes),
     groupReactionEnabled: config.reaction.enabled,
   });

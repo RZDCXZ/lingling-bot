@@ -120,8 +120,8 @@ export function createBotRuntime(
             client,
             message.senderId,
             removed > 0
-              ? `今晚已缓存的 ${removed} 张投稿已经清空。`
-              : "今晚还没有缓存投稿。",
+              ? `已从下一次 22:00 的待发布清单移除 ${removed} 张；归档原图仍会保留。`
+              : "下一次 22:00 的待发布清单目前为空。",
           );
           return;
         }
@@ -132,33 +132,44 @@ export function createBotRuntime(
           await sendOneBotPrivateMessage(
             client,
             message.senderId,
-            `今晚已缓存 ${count}/${config.longevity.maxImages} 张投稿。`,
+            `下一次 22:00 待发布 ${count}/${config.longevity.maxImages} 张。`,
           );
           return;
         }
       }
-      if (
-        message.images?.length &&
-        longevity.isSubmissionWindow(message.senderId)
-      ) {
+      if (command === "/延年益寿" && longevity.canSubmit(message.senderId)) {
+        if (!message.images?.length) {
+          await sendOneBotPrivateMessage(
+            client,
+            message.senderId,
+            "请在同一条消息附上图片并发送 /延年益寿；图片会立即归档并交给模型预审。只提交你有权转发、适合普通群聊的图片；明确露骨、未成年人性化或真人私密内容会被拒绝。",
+          );
+          return;
+        }
         try {
           const images = await imageLoader.load(message.images);
           const result = await longevity.acceptImages(message.senderId, images);
           if (result) {
+            const approved = result.approvedIndexes.length
+              ? `预审通过第 ${result.approvedIndexes.join("、")} 张`
+              : "预审没有图片通过";
+            const rejected = result.rejectedIndexes.length
+              ? `，第 ${result.rejectedIndexes.join("、")} 张未通过`
+              : "，全部通过";
             const ignored = result.ignored
-              ? `，另有 ${result.ignored} 张因达到数量上限未收录`
+              ? `；另有 ${result.ignored} 张虽通过预审，但因达到数量上限未加入`
               : "";
             await sendOneBotPrivateMessage(
               client,
               message.senderId,
-              `收到 ${result.accepted} 张，已保存到当天归档文件夹；今晚已缓存 ${result.total}/${result.max} 张${ignored}。22:00 会先审核，通过后再发到群里。`,
+              `收到 ${result.archived} 张，已保存到 ${result.scheduledDayKey} 归档文件夹；${approved}${rejected}。该日期待发布 ${result.total}/${result.max} 张${ignored}。${result.scheduledDayKey} 22:00 群发前还会复审一次；请确保这些图片是你有权转发的内容。`,
             );
           }
         } catch (error) {
           const publicMessage =
             error instanceof UserFacingError
               ? error.publicMessage
-              : "暂时无法读取或保存这次投稿图片，请检查图片和归档目录后重试。";
+              : "暂时无法完成这次投稿的读取、归档或预审，请稍后重试；已经写入的归档原图会保留，但不会自动进入待发布清单。";
           await sendOneBotPrivateMessage(client, message.senderId, publicMessage);
         }
         return;
@@ -329,8 +340,6 @@ export function createBotRuntime(
           config.longevity.targetGroupIds.every((groupId) =>
             chatLimiter.allow(`group:${groupId}`),
           ) && globalLimiter.allow("global"),
-        sendPrivateText: (userId, text) =>
-          sendOneBotPrivateMessage(client, userId, text),
         sendGroupPost: (groupId, text, images) =>
           sendOneBotGroupMessage(client, groupId, text, images),
         onError: (error) =>

@@ -308,7 +308,7 @@ describe("Codex 提示词", () => {
     expect(prompt).toContain("不得使用任何工具");
   });
 
-  it("延年益寿模式逐图审核并只返回安全图片序号和暧昧配文", () => {
+  it("延年益寿模式从宽逐图审核并只返回适合群聊的图片序号和配文", () => {
     const prompt = buildCodexPrompt(
       "猫娘人设",
       [
@@ -325,9 +325,12 @@ describe("Codex 提示词", () => {
     );
 
     expect(prompt).toContain("[[LONGEVITY:序号列表]]");
-    expect(prompt).toContain("明确为成年女性");
-    expect(prompt).toContain("排除真人照片");
-    expect(prompt).toContain("年龄不明或未成年感角色");
+    expect(prompt).toContain("审核标准从宽");
+    expect(prompt).toContain("普通群聊可以分享时原则上通过");
+    expect(prompt).toContain("明显未成年角色的性化呈现");
+    expect(prompt).toContain(
+      "不得仅因无法证明具体年龄、非女性、非二次元、单纯校服或萌系画风",
+    );
     expect(prompt).toContain("略带暧昧但不能露骨");
     expect(prompt).toContain("必须明确出现“延年益寿”四个字");
     expect(prompt).toContain("本模式不得使用任何工具");

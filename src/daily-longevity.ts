@@ -1,6 +1,6 @@
 import type { AiImage, AiReplyResult, AiService } from "./ai/types.js";
 import type { AppConfig } from "./config.js";
-import { archiveDailyImages } from "./daily-image-archive.js";
+import { DailyLongevityArchive } from "./daily-longevity-archive.js";
 import { formatDayKey } from "./engagement-state.js";
 import { isWithinTimeWindow } from "./group-participation.js";
 
@@ -10,7 +10,6 @@ const LONGEVITY_PATTERN =
 
 export interface DailyLongevityPorts {
   allowGeneration(): boolean;
-  sendPrivateText(userId: string, text: string): Promise<void>;
   sendGroupPost(
     groupId: string,
     text: string,
@@ -24,55 +23,36 @@ export interface DailyLongevityOptions {
   config: AppConfig["longevity"];
   tickMs: number;
   now?: () => number;
-  archiveImages?: (
-    dayKey: string,
-    images: readonly AiImage[],
-  ) => Promise<void>;
 }
 
 export interface LongevitySubmissionResult {
+  archived: number;
   accepted: number;
   ignored: number;
   total: number;
   max: number;
+  scheduledDayKey: string;
+  approvedIndexes: readonly number[];
+  rejectedIndexes: readonly number[];
 }
 
 export class DailyLongevityCoordinator {
   private readonly now: () => number;
-  private readonly archiveImages: NonNullable<
-    DailyLongevityOptions["archiveImages"]
-  >;
-  private readonly images: AiImage[] = [];
+  private readonly archive: DailyLongevityArchive;
   private submissionOperation = Promise.resolve();
-  private currentDayKey: string | undefined;
-  private remindedDayKey: string | undefined;
   private sentDayKey: string | undefined;
   private timer: NodeJS.Timeout | undefined;
   private running = false;
 
   constructor(private readonly options: DailyLongevityOptions) {
     this.now = options.now ?? Date.now;
-    this.archiveImages =
-      options.archiveImages ??
-      (async (dayKey, images) => {
-        await archiveDailyImages(
-          options.config.archiveDirectory,
-          dayKey,
-          images,
-        );
-      });
+    this.archive = new DailyLongevityArchive(options.config.archiveDirectory);
   }
 
-  isSubmissionWindow(userId: string, now = this.now()): boolean {
+  canSubmit(userId: string): boolean {
     return (
       this.options.config.enabled &&
-      userId === this.options.config.submitterUserId &&
-      isWithinTimeWindow(
-        now,
-        this.options.config.timeZone,
-        this.options.config.reminderMinutes,
-        this.options.config.sendMinutes,
-      )
+      userId === this.options.config.submitterUserId
     );
   }
 
@@ -82,29 +62,46 @@ export class DailyLongevityCoordinator {
     now = this.now(),
   ): Promise<LongevitySubmissionResult | null> {
     return this.runSubmissionOperation(async () => {
-      if (!this.isSubmissionWindow(userId, now) || images.length === 0) {
+      if (!this.canSubmit(userId) || images.length === 0) {
         return null;
       }
 
-      const dayKey = this.syncDay(now);
-      this.remindedDayKey = dayKey;
-      const remaining = Math.max(
-        0,
-        this.options.config.maxImages - this.images.length,
-      );
-      const acceptedImages = images.slice(0, remaining).map((image) => ({
+      const dayKey = this.submissionDayKey(now);
+      const submitted = images.map((image) => ({
         dataUrl: image.dataUrl,
         detail: image.detail,
       }));
-      if (acceptedImages.length > 0) {
-        await this.archiveImages(dayKey, acceptedImages);
-        this.images.push(...acceptedImages);
-      }
+      const saved = await this.archive.save(dayKey, submitted);
+      const reviewResult = await this.options.ai.generateReply(
+        [
+          {
+            role: "user",
+            content: `submitted_image_count: ${submitted.length}`,
+            images: submitted,
+          },
+        ],
+        { mode: "daily-longevity" },
+      );
+      const review = requireDailyLongevityReply(
+        reviewResult,
+        submitted.length,
+      );
+      const approvedIndexes = review?.imageIndexes ?? [];
+      const approvedSet = new Set(approvedIndexes);
+      const rejectedIndexes = submitted
+        .map((_, index) => index + 1)
+        .filter((index) => !approvedSet.has(index));
+      const stored = await saved.queue(
+        approvedIndexes,
+        this.options.config.maxImages,
+      );
       return {
-        accepted: acceptedImages.length,
-        ignored: images.length - acceptedImages.length,
-        total: this.images.length,
+        archived: submitted.length,
+        ...stored,
         max: this.options.config.maxImages,
+        scheduledDayKey: dayKey,
+        approvedIndexes,
+        rejectedIndexes,
       };
     });
   }
@@ -120,10 +117,7 @@ export class DailyLongevityCoordinator {
       ) {
         return null;
       }
-      this.syncDay(now);
-      const removed = this.images.length;
-      this.images.splice(0);
-      return removed;
+      return this.archive.clear(this.submissionDayKey(now));
     });
   }
 
@@ -138,8 +132,7 @@ export class DailyLongevityCoordinator {
       ) {
         return null;
       }
-      this.syncDay(now);
-      return this.images.length;
+      return this.archive.count(this.submissionDayKey(now));
     });
   }
 
@@ -168,26 +161,7 @@ export class DailyLongevityCoordinator {
     this.running = true;
     try {
       const now = this.now();
-      const dayKey = await this.runSubmissionOperation(() =>
-        this.syncDay(now),
-      );
-      if (
-        this.remindedDayKey !== dayKey &&
-        isWithinTimeWindow(
-          now,
-          this.options.config.timeZone,
-          this.options.config.reminderMinutes,
-          this.options.config.sendMinutes,
-        )
-      ) {
-        this.remindedDayKey = dayKey;
-        await ports.sendPrivateText(
-          this.options.config.submitterUserId,
-          `【延年益寿】\n今晚 22:00 的环节开始征集图片啦。请在 10 分钟内直接发图，最多 ${this.options.config.maxImages} 张；只提交你有权转发、明确成年、非露骨、非真人的二次元图片。发送 /取消延年益寿 可以清空今晚投稿。`,
-        );
-        return;
-      }
-
+      const dayKey = formatDayKey(now, this.options.config.timeZone);
       if (
         this.sentDayKey === dayKey ||
         !isWithinTimeWindow(
@@ -200,11 +174,13 @@ export class DailyLongevityCoordinator {
         return;
       }
 
-      this.sentDayKey = dayKey;
       const submitted = await this.runSubmissionOperation(() =>
-        this.images.splice(0),
+        this.archive.load(dayKey),
       );
-      if (submitted.length === 0) return;
+      if (submitted.length === 0) {
+        this.sentDayKey = dayKey;
+        return;
+      }
       if (!ports.allowGeneration()) return;
 
       const result = await this.options.ai.generateReply(
@@ -217,27 +193,35 @@ export class DailyLongevityCoordinator {
         ],
         { mode: "daily-longevity" },
       );
-      const post = parseDailyLongevityReply(result, submitted.length);
-      if (!post) return;
-      const selected = post.imageIndexes.map((index) => submitted[index - 1]!);
-      const titledText = post.text.includes("【延年益寿】")
-        ? post.text
-        : `【延年益寿】\n${post.text}`;
-      for (const groupId of this.options.config.targetGroupIds) {
-        await ports.sendGroupPost(groupId, titledText, selected);
+      const post = requireDailyLongevityReply(result, submitted.length);
+      if (post) {
+        const selected = post.imageIndexes.map(
+          (index) => submitted[index - 1]!,
+        );
+        const titledText = post.text.includes("【延年益寿】")
+          ? post.text
+          : `【延年益寿】\n${post.text}`;
+        for (const groupId of this.options.config.targetGroupIds) {
+          await ports.sendGroupPost(groupId, titledText, selected);
+        }
       }
+      await this.runSubmissionOperation(() => this.archive.clear(dayKey));
+      this.sentDayKey = dayKey;
     } finally {
       this.running = false;
     }
   }
 
-  private syncDay(now: number): string {
-    const dayKey = formatDayKey(now, this.options.config.timeZone);
-    if (this.currentDayKey !== dayKey) {
-      this.currentDayKey = dayKey;
-      this.images.splice(0);
-    }
-    return dayKey;
+  private submissionDayKey(now: number): string {
+    const todayKey = formatDayKey(now, this.options.config.timeZone);
+    return isWithinTimeWindow(
+      now,
+      this.options.config.timeZone,
+      0,
+      this.options.config.sendMinutes,
+    )
+      ? todayKey
+      : nextDayKey(todayKey);
   }
 
   private runSubmissionOperation<T>(
@@ -252,11 +236,17 @@ export class DailyLongevityCoordinator {
   }
 }
 
+function nextDayKey(dayKey: string): string {
+  const [year, month, day] = dayKey.split("-").map(Number);
+  const nextDay = new Date(Date.UTC(year!, month! - 1, day! + 1));
+  return nextDay.toISOString().slice(0, 10);
+}
+
 export function parseDailyLongevityReply(
   result: AiReplyResult,
   imageCount: number,
 ): { imageIndexes: number[]; text: string } | null {
-  const text = (typeof result === "string" ? result : result.text).trim();
+  const text = longevityReplyText(result);
   if (text === SILENT_MARKER) return null;
   const match = LONGEVITY_PATTERN.exec(text);
   const caption = match?.[2]?.trim();
@@ -274,4 +264,17 @@ export function parseDailyLongevityReply(
     return null;
   }
   return { imageIndexes, text: caption };
+}
+
+function requireDailyLongevityReply(
+  result: AiReplyResult,
+  imageCount: number,
+): { imageIndexes: number[]; text: string } | null {
+  const parsed = parseDailyLongevityReply(result, imageCount);
+  if (parsed || longevityReplyText(result) === SILENT_MARKER) return parsed;
+  throw new Error("延年益寿审核输出格式无效");
+}
+
+function longevityReplyText(result: AiReplyResult): string {
+  return (typeof result === "string" ? result : result.text).trim();
 }
