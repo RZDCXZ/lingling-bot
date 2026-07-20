@@ -101,7 +101,9 @@ pnpm bots:login
 QQ 登录态失效也会显示为离线；探针不会输出 OneBot Token。
 
 `pnpm bots:login` 会检查两个机器人，只为离线账号重启对应 NapCat 并打开新二维码；也可
-使用 `pnpm login:lingling` 或 `pnpm login:maibot` 单独处理。
+使用 `pnpm login:lingling` 或 `pnpm login:maibot` 单独处理。登录命令与 `status`
+共用 OneBot `get_status` 探针，只有 `online=true` 且 `good=true` 才视为在线，不会把
+3001 端口可连接误判为 QQ 已在线。
 
 在铃铃酱项目中可一次管理两套机器人：
 

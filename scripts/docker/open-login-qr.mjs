@@ -5,6 +5,11 @@ import { chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+import {
+  NODE_ONEBOT_STATUS_PROBE,
+  PYTHON_ONEBOT_STATUS_PROBE,
+} from "./onebot-status-probes.mjs";
+
 const qrPathInContainer = "/app/napcat/cache/qrcode.png";
 const requestedTarget = process.argv[2] ?? "lingling";
 
@@ -15,8 +20,9 @@ const botTargets = {
     coreContainer: "lingling-bot-core",
     probeCommand: [
       "node",
-      "-e",
-      "const net=require('node:net');const s=net.createConnection({host:'napcat',port:3001},()=>{s.end();process.exit(0)});s.setTimeout(2000,()=>{s.destroy();process.exit(1)});s.on('error',()=>process.exit(1));",
+      "--input-type=module",
+      "--eval",
+      NODE_ONEBOT_STATUS_PROBE,
     ],
     qrFileName: "lingling-napcat-qrcode.png",
   },
@@ -24,11 +30,7 @@ const botTargets = {
     label: "麦麦",
     napcatContainer: "maim-bot-napcat",
     coreContainer: "maim-bot-core",
-    probeCommand: [
-      "python",
-      "-c",
-      "import socket; connection = socket.create_connection(('napcat', 3001), 2); connection.close()",
-    ],
+    probeCommand: ["python", "-c", PYTHON_ONEBOT_STATUS_PROBE],
     qrFileName: "maibot-napcat-qrcode.png",
   },
 };
@@ -54,10 +56,17 @@ function containerExists(containerName) {
 
 function isOnline(target) {
   if (!containerExists(target.coreContainer)) return false;
-  return run(
+  const result = run(
     ["exec", target.coreContainer, ...target.probeCommand],
     { capture: true, allowFailure: true },
-  ).status === 0;
+  );
+  if (result.status !== 0) return false;
+  try {
+    const status = JSON.parse(result.stdout.trim());
+    return status.online === true && status.good === true;
+  } catch {
+    return false;
+  }
 }
 
 function readQrHash(containerName) {

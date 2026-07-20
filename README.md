@@ -276,6 +276,7 @@ pnpm bots:stop
 
 `bots:status`/父目录的 `pnpm status` 除了显示四个容器状态，还会通过 OneBot
 `get_status` 显示麦麦与铃铃酱各自的真实 QQ 在线状态。容器运行不再等同于 QQ 在线。
+登录命令使用同一份 `get_status` 探针，不会再把 3001 端口可连接误判为 QQ 已在线。
 
 当前本机已把两个项目统一放在 `/Users/why/code/my-project/qq-bots/`，因此日常可直接
 在父目录运行 `pnpm start/status/restart:core/stop` 或 `pnpm bots:login`，不必先进入
