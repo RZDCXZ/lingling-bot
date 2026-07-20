@@ -203,13 +203,18 @@ describe("主动互动调度", () => {
     );
   });
 
-  it("每天中国时间八点发送一次成都天气和情报雷达", async () => {
+  it("每天八点发送含时政热点但不含来源链接的情报雷达", async () => {
     const now = Date.parse("2026-07-19T00:00:00.000Z");
+    const radarImage = { dataUrl: "data:image/png;base64,cmFkYXI=" };
     const generateReply = vi
       .fn<AiService["generateReply"]>()
-      .mockResolvedValue(
-        "[[REPLY]]成都今天 27～34℃，午后可能下雨，哥哥们记得带伞。AI 圈今天有个新瓜喵~",
-      );
+      .mockResolvedValueOnce(
+        "[[REPLY]]成都今天 27～34℃，午后可能下雨，哥哥们记得带伞。时政热点有一项新政策发布，[详情](https://example.com/policy)；AI 圈也有个新瓜：https://example.com/ai 喵~",
+      )
+      .mockResolvedValueOnce({
+        text: "配图生成完成",
+        images: [radarImage],
+      });
     const engagementState = new MemoryEngagementState();
     const coordinator = new GroupParticipationCoordinator({
       ai: { generateReply },
@@ -237,21 +242,79 @@ describe("主动互动调度", () => {
     await coordinator.runScheduledTick(registration);
     await coordinator.runScheduledTick(registration);
 
-    expect(generateReply).toHaveBeenCalledOnce();
-    expect(generateReply).toHaveBeenCalledWith(expect.any(Array), {
+    expect(generateReply).toHaveBeenCalledTimes(2);
+    expect(generateReply).toHaveBeenNthCalledWith(1, expect.any(Array), {
       mode: "morning-radar",
       hotTopics: ["AI", "明日方舟：终末地", "绝区零", "异环", "鸣潮"],
       weatherLocation: "中国四川成都",
     });
+    expect(generateReply).toHaveBeenNthCalledWith(
+      2,
+      [
+        {
+          role: "user",
+          content: expect.stringContaining("morning_radar_text:"),
+        },
+      ],
+      { mode: "morning-radar-image" },
+    );
     expect(ports.sendGroupText).toHaveBeenCalledOnce();
     expect(ports.sendGroupText).toHaveBeenCalledWith(
       "10001",
       expect.stringContaining("【情报雷达】"),
+      [radarImage],
     );
+    const sentRadar = ports.sendGroupText.mock.calls[0]?.[1] ?? "";
+    expect(sentRadar).toContain("时政热点");
+    expect(sentRadar).toContain("详情");
+    expect(sentRadar).not.toMatch(/https?:\/\//);
     expect(await engagementState.get("10001")).toMatchObject({
       lastMorningRadarDayKey: "2026-07-19",
       proactiveTextCount: 1,
     });
+  });
+
+  it("情报雷达配图失败时仍发送文字", async () => {
+    const now = Date.parse("2026-07-19T00:00:00.000Z");
+    const generateReply = vi
+      .fn<AiService["generateReply"]>()
+      .mockResolvedValueOnce("[[REPLY]]成都今天多云，热点新闻已核验喵~")
+      .mockRejectedValueOnce(new Error("图片服务暂时不可用"));
+    const coordinator = new GroupParticipationCoordinator({
+      ai: { generateReply },
+      config: participationConfig,
+      proactive: proactive({
+        timeZone: "Asia/Shanghai",
+        activeStartMinutes: 9 * 60,
+        hotTopicEnabled: false,
+        unansweredEnabled: false,
+        revivalEnabled: false,
+        morningRadarEnabled: true,
+      }),
+      reaction: reactionDisabled,
+      engagementState: new MemoryEngagementState(),
+      now: () => now,
+      random: () => 0,
+    });
+    const ports = scheduledPorts();
+    const onError = vi.fn();
+
+    await coordinator.runScheduledTick({
+      groupIds: ["10001"],
+      ports,
+      allowGeneration: () => true,
+      onError,
+    });
+
+    expect(ports.sendGroupText).toHaveBeenCalledWith(
+      "10001",
+      expect.stringContaining("【情报雷达】"),
+    );
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "情报雷达配图生成失败，已降级为纯文字",
+      }),
+    );
   });
 
   it("每天二十一点从当天真实发言中选择一人友好批斗", async () => {

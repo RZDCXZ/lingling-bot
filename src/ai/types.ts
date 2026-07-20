@@ -32,6 +32,7 @@ export interface GenerateReplyOptions {
     | "cold-revival"
     | "hot-topic-feed"
     | "morning-radar"
+    | "morning-radar-image"
     | "daily-roast"
     | "daily-longevity";
   reactionEmojiIds?: readonly string[];

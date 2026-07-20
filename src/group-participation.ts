@@ -1,4 +1,9 @@
-import type { AiMessage, AiReplyResult, AiService } from "./ai/types.js";
+import type {
+  AiGeneratedImage,
+  AiMessage,
+  AiReplyResult,
+  AiService,
+} from "./ai/types.js";
 import type { AppConfig } from "./config.js";
 import {
   formatDayKey,
@@ -46,7 +51,11 @@ export interface ScheduledGroupReplyTarget {
 }
 
 export interface ScheduledGroupPorts {
-  sendGroupText(groupId: string, text: string): Promise<void>;
+  sendGroupText(
+    groupId: string,
+    text: string,
+    images?: readonly AiGeneratedImage[],
+  ): Promise<void>;
   sendGroupReply(target: ScheduledGroupReplyTarget, text: string): Promise<void>;
 }
 
@@ -350,9 +359,46 @@ export class GroupParticipationCoordinator {
       );
       const answer = parseParticipationReply(result);
       if (!answer) return true;
-      const titledAnswer = withScheduledTaskTitle(answer, "情报雷达");
+      const linkFreeAnswer = stripLinksFromScheduledText(answer);
+      if (!linkFreeAnswer) return true;
+      const titledAnswer = withScheduledTaskTitle(
+        linkFreeAnswer,
+        "情报雷达",
+      );
+      let radarImages: readonly AiGeneratedImage[] = [];
+      try {
+        const imageResult = await this.options.ai.generateReply(
+          [
+            {
+              role: "user",
+              content: `morning_radar_text: ${linkFreeAnswer}`,
+            },
+          ],
+          { mode: "morning-radar-image" },
+        );
+        radarImages =
+          typeof imageResult === "string"
+            ? []
+            : (imageResult.images?.slice(0, 1) ?? []);
+      } catch (error) {
+        const normalized =
+          error instanceof Error ? error : new Error(String(error));
+        registration.onError?.(
+          new Error("情报雷达配图生成失败，已降级为纯文字", {
+            cause: normalized,
+          }),
+        );
+      }
 
-      await registration.ports.sendGroupText(groupId, titledAnswer);
+      if (radarImages.length > 0) {
+        await registration.ports.sendGroupText(
+          groupId,
+          titledAnswer,
+          radarImages,
+        );
+      } else {
+        await registration.ports.sendGroupText(groupId, titledAnswer);
+      }
       this.recordBotReply(groupId, titledAnswer);
       await this.engagementState.recordProactiveText(groupId, this.now());
       return true;
@@ -998,6 +1044,22 @@ function groupDailyRoastMessagesBySender(
 function withScheduledTaskTitle(text: string, title: string): string {
   const marker = `【${title}】`;
   return text.includes(marker) ? text : `${marker}\n${text}`;
+}
+
+function stripLinksFromScheduledText(text: string): string {
+  return text
+    .replace(
+      /\[([^\]\n]+)\]\(\s*(?:https?:\/\/|www\.)[^)\s]+\s*\)/gi,
+      "$1",
+    )
+    .replace(/<https?:\/\/[^>\s]+>/gi, "")
+    .replace(/https?:\/\/[A-Za-z0-9\-._~:/?#@!$&'()*+,;=%]+/gi, "")
+    .replace(/\bwww\.[A-Za-z0-9\-._~:/?#@!$&'()*+,;=%]+/gi, "")
+    .replace(/[ \t]+([，。！？；：、])/g, "$1")
+    .replace(/^[ \t]*(?:来源|链接|参考资料)[：:]?[ \t]*$/gim, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function randomBetween(min: number, max: number, random: () => number): number {

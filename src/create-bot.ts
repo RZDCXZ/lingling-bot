@@ -301,8 +301,8 @@ export function createBotRuntime(
       participation.startScheduler({
         groupIds: [...config.oneBot.allowedGroupIds],
         ports: {
-          sendGroupText: (groupId, text) =>
-            sendOneBotGroupMessage(client, groupId, text),
+          sendGroupText: (groupId, text, images) =>
+            sendOneBotGroupMessage(client, groupId, text, images),
           sendGroupReply: (target, text) =>
             sendOneBotGroupReply(
               client,

@@ -244,7 +244,7 @@ describe("Codex 提示词", () => {
     expect(prompt).toContain("来源链接");
   });
 
-  it("早间情报雷达搜索成都天气、实用建议和指定领域资讯", () => {
+  it("早间情报雷达加入时政和热点新闻但最终不附链接", () => {
     const prompt = buildCodexPrompt(
       "猫娘人设",
       [{ role: "user", content: "morning_radar_date: 2026-07-19" }],
@@ -261,7 +261,25 @@ describe("Codex 提示词", () => {
     expect(prompt).toContain("最高最低温");
     expect(prompt).toContain("穿衣、带伞或通勤建议");
     expect(prompt).toContain("最近 24 小时");
-    expect(prompt).toContain("最多三条");
+    expect(prompt).toContain("国内外时政");
+    expect(prompt).toContain("热点新闻");
+    expect(prompt).toContain("最多四条");
+    expect(prompt).toContain("关键事实至少交叉核验两处");
+    expect(prompt).toContain("最终 QQ 消息不得包含 URL、Markdown 链接");
+
+    const imagePrompt = buildCodexPrompt(
+      "猫娘人设",
+      [
+        {
+          role: "user",
+          content: "morning_radar_text: 成都多云，AI 发布新模型",
+        },
+      ],
+      "morning-radar-image",
+    );
+    expect(imagePrompt).toContain("生成恰好一张 16:9 横版早报主题插画");
+    expect(imagePrompt).toContain("只允许使用内置图片生成功能");
+    expect(imagePrompt).toContain("不得网页搜索");
   });
 
   it("批斗大会允许无厘头罪名但禁止编造黑料和攻击敏感属性", () => {
